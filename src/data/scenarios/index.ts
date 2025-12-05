@@ -1215,4 +1215,1314 @@ Trade-off: consistency vs latency.`,
       },
     ],
   },
+
+  // ==================== SCENARIO 2: DC FAILOVER ====================
+  {
+    id: 'dc-failover',
+    name: 'DC Failover (EU недоступен)',
+    description: 'EU DC не отвечает, Global LB переключает трафик на US DC',
+    initialViewLevel: 'global',
+    steps: [
+      // ========== ПУТЬ ДО GLOBAL LB ==========
+      {
+        id: 'fail-1',
+        fromNode: 'client',
+        toNode: 'dns',
+        edgeId: 'e-client-dns',
+        type: 'request',
+        title: 'DNS Lookup',
+        description: 'Резолвинг доменного имени',
+        detailedInfo: `ЗАЧЕМ: Получить IP адрес для подключения.
+
+ЧТО ПРОИСХОДИТ:
+1. Клиент запрашивает api.store.com
+2. DNS возвращает Anycast IP балансировщика
+3. Клиент не знает о проблемах в EU DC
+
+ПАТТЕРН: DNS-based Discovery — первый уровень отказоустойчивости.`,
+        duration: 2400,
+        realLatency: 25,
+        payload: { query: 'api.store.com', type: 'A' },
+      },
+      {
+        id: 'fail-2',
+        fromNode: 'dns',
+        toNode: 'client',
+        edgeId: 'e-client-dns',
+        reverse: true,
+        type: 'response',
+        title: 'DNS Response',
+        description: 'IP адрес получен',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. DNS вернул Anycast IP Global Load Balancer
+2. Этот IP не привязан к конкретному ДЦ
+3. Failover будет на уровне GLB, не DNS
+
+ПАТТЕРН: Anycast — один IP, много локаций.`,
+        duration: 1600,
+        realLatency: 5,
+        payload: { ip: '104.16.123.96', ttl: 300 },
+      },
+      {
+        id: 'fail-3',
+        fromNode: 'client',
+        toNode: 'cdn',
+        edgeId: 'e-client-cdn',
+        type: 'request',
+        title: 'Client → CDN',
+        description: 'Запрос на CDN Edge',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. HTTPS соединение с CDN edge
+2. TLS termination
+3. WAF проверки пройдены
+
+CDN не знает о состоянии backend ДЦ.`,
+        duration: 2000,
+        realLatency: 8,
+        payload: { method: 'GET', path: '/api/v1/orders/123' },
+      },
+      {
+        id: 'fail-4',
+        fromNode: 'cdn',
+        toNode: 'global-lb',
+        edgeId: 'e-cdn-global-lb',
+        type: 'request',
+        title: 'CDN → Global LB',
+        description: 'Запрос на origin',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. CDN cache miss (или динамический запрос)
+2. Проксирование на Global Load Balancer
+3. GLB выберет ДЦ на основе health checks
+
+ПАТТЕРН: CDN как первый уровень защиты.`,
+        duration: 1600,
+        realLatency: 3,
+        payload: { cached: false },
+      },
+
+      // ========== FAILOVER: EU → US ==========
+      {
+        id: 'fail-5',
+        fromNode: 'global-lb',
+        toNode: 'dc-eu',
+        edgeId: 'e-global-lb-dc-eu',
+        type: 'request',
+        title: '❌ Попытка #1: EU DC',
+        description: 'GLB пытается направить в primary DC',
+        detailedInfo: `ЗАЧЕМ: EU DC — primary, обычно самый близкий для EU клиентов.
+
+ЧТО ПРОИСХОДИТ:
+1. GLB отправляет health check probe
+2. EU DC не отвечает уже 30 секунд
+3. Health status: UNHEALTHY
+
+⚠️ ПРОБЛЕМА: EU DC недоступен!
+Причины могут быть:
+• Сетевой сбой (fiber cut)
+• Авария в дата-центре
+• DDoS атака
+• Плановое обслуживание`,
+        duration: 4000,
+        realLatency: 3000,
+        payload: { targetDC: 'eu-central-1', healthCheck: 'FAILED', lastHealthy: '30s ago' },
+      },
+      {
+        id: 'fail-6',
+        fromNode: 'dc-eu',
+        toNode: 'global-lb',
+        edgeId: 'e-global-lb-dc-eu',
+        reverse: true,
+        type: 'response',
+        title: '❌ EU DC: TIMEOUT',
+        description: 'Нет ответа от EU DC',
+        detailedInfo: `ЧТО ПРОИЗОШЛО:
+1. Connection timeout после 3 секунд
+2. Или TCP RST (connection refused)
+3. Или HTTP 503 от border router
+
+GLB РЕАКЦИЯ:
+1. Помечает EU DC как unhealthy
+2. Исключает из rotation на 30 сек
+3. Немедленно пробует следующий ДЦ
+
+ПАТТЕРН: Fast Failover — переключение за миллисекунды.
+Клиент не видит ошибку, только небольшую задержку.`,
+        duration: 800,
+        realLatency: 50,
+        payload: { error: 'CONNECTION_TIMEOUT', statusCode: null, action: 'FAILOVER' },
+      },
+      {
+        id: 'fail-7',
+        fromNode: 'global-lb',
+        toNode: 'dc-us',
+        edgeId: 'e-global-lb-dc-us',
+        type: 'request',
+        title: '✅ Failover → US DC',
+        description: 'GLB переключается на резервный ДЦ',
+        detailedInfo: `ЗАЧЕМ: Обеспечить доступность несмотря на сбой primary.
+
+ЧТО ПРОИСХОДИТ:
+1. GLB выбирает следующий по приоритету ДЦ
+2. US DC healthy, latency 85ms от клиента
+3. Asia DC тоже healthy, но дальше (150ms)
+4. Выбран US DC
+
+ПАТТЕРН: Active-Active Multi-DC
+Все ДЦ готовы принять трафик в любой момент.
+
+⚡ ВРЕМЯ FAILOVER: ~50ms
+Клиент даже не заметил переключения!`,
+        duration: 2400,
+        realLatency: 85,
+        payload: { targetDC: 'us-east-1', reason: 'failover_from_eu', latency: '85ms' },
+      },
+
+      // ========== US DC: ОБРАБОТКА ЗАПРОСА ==========
+      {
+        id: 'fail-8',
+        fromNode: 'dc-us',
+        toNode: 'dc-us-lb',
+        edgeId: 'e-dc-us-lb',
+        type: 'request',
+        title: 'US DC → Regional LB',
+        description: 'Запрос входит в US датацентр',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. Трафик проходит через US border router
+2. Firewall проверки
+3. Regional LB принимает соединение
+
+US DC работает как обычно, не знает о проблемах EU.`,
+        duration: 800,
+        realLatency: 1,
+        payload: { datacenter: 'us-east-1' },
+      },
+      {
+        id: 'fail-9',
+        fromNode: 'dc-us-lb',
+        toNode: 'dc-us-gw',
+        edgeId: 'e-dc-us-lb-gw',
+        type: 'request',
+        title: 'Regional LB → API Gateway',
+        description: 'Балансировка на API Gateway',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. HAProxy выбирает здоровый инстанс API Gateway
+2. Least connections алгоритм
+3. US DC имеет меньше инстансов чем EU (read replica)
+
+ВАЖНО: US DC — read replica, только GET запросы!`,
+        duration: 800,
+        realLatency: 2,
+        payload: { algorithm: 'least_connections' },
+      },
+      {
+        id: 'fail-10',
+        fromNode: 'dc-us-gw',
+        toNode: 'dc-us-ingress',
+        edgeId: 'e-dc-us-gw-ingress',
+        type: 'request',
+        title: 'API Gateway → K8s Ingress',
+        description: 'Маршрутизация в Kubernetes',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. API Gateway проверяет JWT (локально)
+2. Rate limiting (отдельные лимиты для US DC)
+3. Роутинг на K8s Ingress
+
+⚠️ Если бы это был POST (создание заказа):
+US DC вернул бы 307 Redirect на EU DC
+или 503 "Primary DC unavailable"`,
+        duration: 800,
+        realLatency: 2,
+        payload: { method: 'GET', canHandle: true },
+      },
+      {
+        id: 'fail-11',
+        fromNode: 'dc-us-ingress',
+        toNode: 'dc-us-order-svc',
+        edgeId: 'e-dc-us-ingress-order',
+        type: 'request',
+        title: 'Ingress → Order Service',
+        description: 'NGINX роутит на сервис',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. Ingress rule: /api/v1/orders/* → order-service
+2. ClusterIP Service получает запрос
+3. Order Service в US — read-only replica
+
+ПАТТЕРН: Read Replica — только чтение данных.`,
+        duration: 600,
+        realLatency: 1,
+        payload: { path: '/api/v1/orders/123' },
+      },
+      {
+        id: 'fail-12',
+        fromNode: 'dc-us-order-svc',
+        toNode: 'dc-us-order-pod',
+        edgeId: 'e-dc-us-order-svc-pod',
+        type: 'request',
+        title: 'Service → Order Pod',
+        description: 'K8s выбирает Pod',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. kube-proxy выбирает healthy pod
+2. Round-robin между репликами
+3. Pod готов обработать GET запрос`,
+        duration: 400,
+        realLatency: 0.5,
+        payload: { selectedPod: 'order-pod-us-7x9k2' },
+      },
+      {
+        id: 'fail-13',
+        fromNode: 'dc-us-order-pod',
+        toNode: 'dc-us-cache',
+        edgeId: 'e-dc-us-order-pod-cache',
+        type: 'request',
+        title: 'Order Pod → Cache',
+        description: 'Проверка локального кэша',
+        detailedInfo: `ЗАЧЕМ: Избежать похода в БД.
+
+ЧТО ПРОИСХОДИТ:
+1. Redis GET order:123
+2. Локальный кэш US DC
+3. Данные реплицированы из EU через CDC
+
+⚠️ EVENTUAL CONSISTENCY:
+Данные могут отставать на ~100-500ms от EU.`,
+        duration: 400,
+        realLatency: 0.5,
+        payload: { key: 'order:123', operation: 'GET' },
+      },
+      {
+        id: 'fail-14',
+        fromNode: 'dc-us-cache',
+        toNode: 'dc-us-order-pod',
+        edgeId: 'e-dc-us-order-pod-cache',
+        reverse: true,
+        type: 'response',
+        title: 'Cache HIT',
+        description: 'Данные найдены в кэше',
+        detailedInfo: `РЕЗУЛЬТАТ: Cache HIT!
+
+ЧТО ВЕРНУЛОСЬ:
+1. Order данные из локального Redis
+2. Данные были реплицированы 50ms назад
+3. Consistent read не гарантирован
+
+ПАТТЕРН: Cache-Aside с eventual consistency.
+Для критичных данных можно форсировать read from primary.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { hit: true, orderId: 'order_123', replicaLag: '50ms' },
+      },
+
+      // ========== RESPONSE PATH ==========
+      {
+        id: 'fail-15',
+        fromNode: 'dc-us-order-pod',
+        toNode: 'dc-us-order-svc',
+        edgeId: 'e-dc-us-order-svc-pod',
+        reverse: true,
+        type: 'response',
+        title: 'Order Pod → Service',
+        description: 'Response начинает обратный путь',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. Order Pod формирует JSON response
+2. Добавляет header: X-Served-By: us-east-1
+3. Добавляет header: X-Data-Freshness: 50ms
+
+Клиент может увидеть из какого ДЦ пришёл ответ.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { servedBy: 'us-east-1' },
+      },
+      {
+        id: 'fail-16',
+        fromNode: 'dc-us-order-svc',
+        toNode: 'dc-us-ingress',
+        edgeId: 'e-dc-us-ingress-order',
+        reverse: true,
+        type: 'response',
+        title: 'Service → Ingress',
+        description: 'Response через Ingress',
+        detailedInfo: `Ingress логирует response и передаёт дальше.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: {},
+      },
+      {
+        id: 'fail-17',
+        fromNode: 'dc-us-ingress',
+        toNode: 'dc-us-gw',
+        edgeId: 'e-dc-us-gw-ingress',
+        reverse: true,
+        type: 'response',
+        title: 'Ingress → API Gateway',
+        description: 'Response через API Gateway',
+        detailedInfo: `API Gateway добавляет стандартные headers.`,
+        duration: 200,
+        realLatency: 1,
+        payload: {},
+      },
+      {
+        id: 'fail-18',
+        fromNode: 'dc-us-gw',
+        toNode: 'dc-us-lb',
+        edgeId: 'e-dc-us-lb-gw',
+        reverse: true,
+        type: 'response',
+        title: 'API Gateway → Regional LB',
+        description: 'Response через LB',
+        detailedInfo: `HAProxy записывает метрики успешного запроса.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: {},
+      },
+      {
+        id: 'fail-19',
+        fromNode: 'dc-us-lb',
+        toNode: 'dc-us',
+        edgeId: 'e-dc-us-lb',
+        reverse: true,
+        type: 'response',
+        title: 'Regional LB → DC Border',
+        description: 'Response выходит из DC',
+        detailedInfo: `Трафик покидает US датацентр.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: {},
+      },
+      {
+        id: 'fail-20',
+        fromNode: 'dc-us',
+        toNode: 'global-lb',
+        edgeId: 'e-global-lb-dc-us',
+        reverse: true,
+        type: 'response',
+        title: 'US DC → Global LB',
+        description: 'Response на Global LB',
+        detailedInfo: `GLB видит успешный ответ от US DC.
+
+МЕТРИКИ ОБНОВЛЕНЫ:
+• eu-central-1: UNHEALTHY (0% success)
+• us-east-1: HEALTHY (100% success)
+• ap-southeast-1: HEALTHY (standby)`,
+        duration: 400,
+        realLatency: 1,
+        payload: { successfulDC: 'us-east-1' },
+      },
+      {
+        id: 'fail-21',
+        fromNode: 'global-lb',
+        toNode: 'cdn',
+        edgeId: 'e-cdn-global-lb',
+        reverse: true,
+        type: 'response',
+        title: 'Global LB → CDN',
+        description: 'Response на CDN edge',
+        detailedInfo: `CDN получает ответ от origin.
+
+Для GET запросов CDN может закэшировать ответ,
+уменьшая нагрузку на backend при повторных запросах.`,
+        duration: 400,
+        realLatency: 3,
+        payload: { cacheable: true },
+      },
+      {
+        id: 'fail-22',
+        fromNode: 'cdn',
+        toNode: 'client',
+        edgeId: 'e-client-cdn',
+        reverse: true,
+        type: 'response',
+        title: '✅ Response → Client',
+        description: 'Клиент получает ответ (degraded mode)',
+        detailedInfo: `РЕЗУЛЬТАТ: Запрос успешно обработан!
+
+✅ ЧТО ПОЛУЧИЛ КЛИЕНТ:
+• HTTP 200 OK
+• Order данные (возможно с небольшим lag)
+• Header: X-Served-By: us-east-1
+
+⏱️ ОБЩЕЕ ВРЕМЯ: ~180ms (vs ~80ms при healthy EU)
+• DNS: 30ms
+• Failover attempt: 50ms (timeout)
+• US DC processing: 100ms
+
+📊 ИТОГО:
+• Клиент получил данные
+• Задержка +100ms из-за failover
+• Данные eventual consistent (lag ~50-500ms)
+
+ПАТТЕРН: Graceful Degradation
+Система работает, но с ограничениями:
+• Только READ операции
+• Возможен stale data
+• Увеличенная latency`,
+        duration: 1200,
+        realLatency: 10,
+        payload: {
+          status: 200,
+          servedBy: 'us-east-1',
+          degradedMode: true,
+          totalLatency: '180ms',
+          dataFreshness: 'eventual_consistency'
+        },
+      },
+    ],
+  },
+
+  // ==================== SCENARIO 3: SERVICE OVERLOAD ====================
+  {
+    id: 'service-overload',
+    name: 'Service Overload (Rate Limit + Circuit Breaker)',
+    description: 'Чёрная пятница: Rate Limiter отсекает избыточный трафик, Circuit Breaker защищает сервисы',
+    initialViewLevel: 'global',
+    steps: [
+      // ========== ПУТЬ ДО API GATEWAY ==========
+      {
+        id: 'over-1',
+        fromNode: 'client',
+        toNode: 'dns',
+        edgeId: 'e-client-dns',
+        type: 'request',
+        title: 'DNS Lookup',
+        description: 'Начало запроса в час пик',
+        detailedInfo: `КОНТЕКСТ: Чёрная пятница, 10x обычного трафика.
+
+ЧТО ПРОИСХОДИТ:
+1. Тысячи клиентов одновременно
+2. DNS справляется (stateless, легко масштабируется)
+3. Проблемы начнутся дальше...
+
+ТЕКУЩАЯ НАГРУЗКА:
+• Обычно: 1,000 RPS
+• Сейчас: 10,000 RPS`,
+        duration: 2400,
+        realLatency: 25,
+        payload: { query: 'api.store.com', currentLoad: '10x normal' },
+      },
+      {
+        id: 'over-2',
+        fromNode: 'dns',
+        toNode: 'client',
+        edgeId: 'e-client-dns',
+        reverse: true,
+        type: 'response',
+        title: 'DNS Response',
+        description: 'IP получен',
+        detailedInfo: `DNS отвечает как обычно.`,
+        duration: 1600,
+        realLatency: 5,
+        payload: { ip: '104.16.123.96' },
+      },
+      {
+        id: 'over-3',
+        fromNode: 'client',
+        toNode: 'cdn',
+        edgeId: 'e-client-cdn',
+        type: 'request',
+        title: 'Client → CDN',
+        description: 'Запрос на создание заказа',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. POST /api/v1/orders — не кэшируется
+2. CDN пропускает на origin
+3. WAF отсекает явные атаки, но легитимный трафик проходит
+
+CDN DDoS Protection активна, но это не атака — это реальные пользователи.`,
+        duration: 2000,
+        realLatency: 8,
+        payload: { method: 'POST', path: '/api/v1/orders' },
+      },
+      {
+        id: 'over-4',
+        fromNode: 'cdn',
+        toNode: 'global-lb',
+        edgeId: 'e-cdn-global-lb',
+        type: 'request',
+        title: 'CDN → Global LB',
+        description: 'Трафик идёт на origin',
+        detailedInfo: `Global LB видит 10x нагрузку.
+
+ВСЕ ДЦ ПЕРЕГРУЖЕНЫ:
+• EU DC: 85% capacity
+• US DC: 70% capacity
+• Asia DC: 60% capacity
+
+GLB распределяет по весам, но все ДЦ под давлением.`,
+        duration: 1600,
+        realLatency: 3,
+        payload: { loadDistribution: { eu: '85%', us: '70%', asia: '60%' } },
+      },
+      {
+        id: 'over-5',
+        fromNode: 'global-lb',
+        toNode: 'dc-eu',
+        edgeId: 'e-global-lb-dc-eu',
+        type: 'request',
+        title: 'Global LB → EU DC',
+        description: 'Запрос направлен в primary DC',
+        detailedInfo: `EU DC выбран как primary для POST запросов.
+
+⚠️ НАГРУЗКА КРИТИЧЕСКАЯ:
+• CPU: 85%
+• Memory: 78%
+• Network: 70%
+• Active connections: 50,000`,
+        duration: 1600,
+        realLatency: 2,
+        payload: { targetDC: 'eu-central-1', load: 'critical' },
+      },
+      {
+        id: 'over-6',
+        fromNode: 'dc-eu',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb',
+        type: 'request',
+        title: 'DC → Regional LB',
+        description: 'Вход в датацентр',
+        detailedInfo: `Regional LB под высокой нагрузкой.
+
+HAProxy метрики:
+• Queue depth: 500 requests
+• Avg response time: 2s (обычно 100ms)
+• Backend health: DEGRADED`,
+        duration: 800,
+        realLatency: 1,
+        payload: { queueDepth: 500 },
+      },
+      {
+        id: 'over-7',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-lb-gw',
+        type: 'request',
+        title: 'Regional LB → API Gateway',
+        description: 'Запрос на API Gateway',
+        detailedInfo: `API Gateway — первая линия защиты от перегрузки.
+
+Здесь будет:
+1. Аутентификация (быстро, JWT локально)
+2. Rate Limiting (критически важно!)
+3. Роутинг в K8s`,
+        duration: 1000,
+        realLatency: 2,
+        payload: {},
+      },
+
+      // ========== AUTHENTICATION (быстро) ==========
+      {
+        id: 'over-8',
+        fromNode: 'dc-eu-gw',
+        toNode: 'dc-eu-auth',
+        edgeId: 'e-dc-eu-gw-auth',
+        type: 'request',
+        title: 'JWT Validation',
+        description: 'Проверка токена',
+        detailedInfo: `JWT проверяется ЛОКАЛЬНО — быстро даже под нагрузкой.
+
+ЧТО ПРОИСХОДИТ:
+1. Подпись проверяется публичным ключом (в памяти)
+2. Expiration проверяется
+3. НЕ ходим в Redis для каждого запроса!
+
+⚡ Время: ~1ms даже при 10x нагрузке`,
+        duration: 400,
+        realLatency: 1,
+        payload: { localValidation: true },
+      },
+      {
+        id: 'over-9',
+        fromNode: 'dc-eu-auth',
+        toNode: 'dc-eu-session',
+        edgeId: 'e-dc-eu-auth-session',
+        type: 'request',
+        title: 'Token Blacklist Check',
+        description: 'Проверка отзыва токена',
+        detailedInfo: `Redis под нагрузкой, но справляется.
+
+REDIS МЕТРИКИ:
+• Operations/sec: 100,000 (capacity: 500,000)
+• Memory: 60%
+• Latency p99: 2ms (обычно 0.5ms)
+
+Redis масштабируется горизонтально — ОК!`,
+        duration: 400,
+        realLatency: 2,
+        payload: { redisLoad: '20%' },
+      },
+      {
+        id: 'over-10',
+        fromNode: 'dc-eu-session',
+        toNode: 'dc-eu-auth',
+        edgeId: 'e-dc-eu-auth-session',
+        reverse: true,
+        type: 'response',
+        title: 'Token OK',
+        description: 'Токен валиден',
+        detailedInfo: `Токен не в blacklist — пользователь аутентифицирован.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { inBlacklist: false },
+      },
+      {
+        id: 'over-11',
+        fromNode: 'dc-eu-auth',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-gw-auth',
+        reverse: true,
+        type: 'response',
+        title: 'Auth Complete',
+        description: 'Аутентификация пройдена',
+        detailedInfo: `Пользователь: user_456
+Permissions: orders:create
+
+Теперь RATE LIMITING — критический момент!`,
+        duration: 200,
+        realLatency: 1,
+        payload: { userId: 'user_456' },
+      },
+
+      // ========== RATE LIMITING — ОТКАЗ ==========
+      {
+        id: 'over-12',
+        fromNode: 'dc-eu-gw',
+        toNode: 'dc-eu-ratelimit',
+        edgeId: 'e-dc-eu-gw-ratelimit',
+        type: 'request',
+        title: '⚠️ Rate Limit Check',
+        description: 'Проверка лимитов запросов',
+        detailedInfo: `ЗАЧЕМ: Защитить backend от перегрузки.
+
+ЛИМИТЫ ДЛЯ user_456:
+• POST /orders: 10 req/min (обычные пользователи)
+• Premium users: 100 req/min
+• Total API: 1000 req/min
+
+ТЕКУЩИЙ СТАТУС user_456:
+• Запросов за минуту: 10
+• Следующий запрос: ПРЕВЫСИТ ЛИМИТ!`,
+        duration: 400,
+        realLatency: 1,
+        payload: { userId: 'user_456', endpoint: 'POST /orders', currentCount: 10, limit: 10 },
+      },
+      {
+        id: 'over-13',
+        fromNode: 'dc-eu-ratelimit',
+        toNode: 'dc-eu-cache',
+        edgeId: 'e-dc-eu-ratelimit-cache',
+        type: 'request',
+        title: 'Check Rate Counter',
+        description: 'Проверка счётчика в Redis',
+        detailedInfo: `ЧТО ПРОИСХОДИТ:
+1. INCR rate:user_456:orders:minute
+2. Текущее значение: 11
+3. Лимит: 10
+4. 11 > 10 → ПРЕВЫШЕН!
+
+АЛГОРИТМ: Token Bucket
+• Bucket size: 10 tokens
+• Refill rate: 10 tokens/minute
+• Current tokens: 0 (все использованы)`,
+        duration: 300,
+        realLatency: 0.5,
+        payload: { key: 'rate:user_456:orders:minute', operation: 'INCR' },
+      },
+      {
+        id: 'over-14',
+        fromNode: 'dc-eu-cache',
+        toNode: 'dc-eu-ratelimit',
+        edgeId: 'e-dc-eu-ratelimit-cache',
+        reverse: true,
+        type: 'response',
+        title: '🔴 LIMIT EXCEEDED',
+        description: 'Лимит запросов превышен',
+        detailedInfo: `REDIS ОТВЕТ:
+• Current count: 11
+• Limit: 10
+• TTL: 45 seconds (до сброса)
+
+РЕШЕНИЕ: Отклонить запрос с 429.
+
+ЭТО ЗАЩИЩАЕТ:
+• Backend сервисы от перегрузки
+• Других пользователей от degradation
+• Базы данных от исчерпания connections`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { exceeded: true, current: 11, limit: 10, retryAfter: 45 },
+      },
+      {
+        id: 'over-15',
+        fromNode: 'dc-eu-ratelimit',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-gw-ratelimit',
+        reverse: true,
+        type: 'response',
+        title: '❌ 429 Too Many Requests',
+        description: 'Rate Limiter отклоняет запрос',
+        detailedInfo: `ОТВЕТ RATE LIMITER:
+{
+  "error": "rate_limit_exceeded",
+  "limit": 10,
+  "remaining": 0,
+  "reset": 45,
+  "retryAfter": 45
+}
+
+HEADERS:
+• X-RateLimit-Limit: 10
+• X-RateLimit-Remaining: 0
+• X-RateLimit-Reset: 1699999999
+• Retry-After: 45
+
+ПАТТЕРН: Backpressure
+Система явно сообщает клиенту "подожди".`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { status: 429, retryAfter: 45 },
+      },
+
+      // ========== ERROR RESPONSE PATH ==========
+      {
+        id: 'over-16',
+        fromNode: 'dc-eu-gw',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb-gw',
+        reverse: true,
+        type: 'response',
+        title: 'Error → Regional LB',
+        description: '429 идёт обратно',
+        detailedInfo: `API Gateway формирует error response.
+
+МЕТРИКИ ОБНОВЛЕНЫ:
+• rate_limited_requests_total{user="user_456"} ++
+• Это попадёт в Grafana dashboard`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { statusCode: 429 },
+      },
+      {
+        id: 'over-17',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu',
+        edgeId: 'e-dc-eu-lb',
+        reverse: true,
+        type: 'response',
+        title: 'LB → DC Border',
+        description: 'Error выходит из LB',
+        detailedInfo: `HAProxy записывает 429 в access log.
+
+Метрика: http_responses_total{status="429"} растёт.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: {},
+      },
+      {
+        id: 'over-18',
+        fromNode: 'dc-eu',
+        toNode: 'global-lb',
+        edgeId: 'e-global-lb-dc-eu',
+        reverse: true,
+        type: 'response',
+        title: 'DC → Global LB',
+        description: 'Error на Global LB',
+        detailedInfo: `GLB видит 429 — это НЕ ошибка сервера!
+
+429 НЕ влияет на health check:
+• Сервер работает, просто отклоняет избыточный трафик
+• Это ожидаемое поведение под нагрузкой`,
+        duration: 400,
+        realLatency: 1,
+        payload: { healthImpact: 'none' },
+      },
+      {
+        id: 'over-19',
+        fromNode: 'global-lb',
+        toNode: 'cdn',
+        edgeId: 'e-cdn-global-lb',
+        reverse: true,
+        type: 'response',
+        title: 'Global LB → CDN',
+        description: 'Error на CDN',
+        detailedInfo: `CDN НЕ кэширует 429 ответы.
+
+Каждый запрос будет проверяться индивидуально.`,
+        duration: 400,
+        realLatency: 3,
+        payload: { cached: false },
+      },
+      {
+        id: 'over-20',
+        fromNode: 'cdn',
+        toNode: 'client',
+        edgeId: 'e-client-cdn',
+        reverse: true,
+        type: 'response',
+        title: '❌ 429 → Client',
+        description: 'Клиент получает отказ',
+        detailedInfo: `КЛИЕНТ ПОЛУЧАЕТ:
+
+HTTP/1.1 429 Too Many Requests
+Retry-After: 45
+X-RateLimit-Limit: 10
+X-RateLimit-Remaining: 0
+
+{
+  "error": "rate_limit_exceeded",
+  "message": "Too many requests. Please retry after 45 seconds.",
+  "retryAfter": 45
+}
+
+📱 ЧТО ДОЛЖЕН СДЕЛАТЬ КЛИЕНТ:
+1. Показать пользователю сообщение
+2. Реализовать exponential backoff
+3. Retry через Retry-After секунд
+
+⏱️ ВРЕМЯ ОТВЕТА: ~50ms
+(Быстро! Не тратили ресурсы backend)`,
+        duration: 1200,
+        realLatency: 10,
+        payload: { status: 429, message: 'Rate limit exceeded', retryAfter: 45 },
+      },
+
+      // ========== ВТОРОЙ ЗАПРОС: CIRCUIT BREAKER ==========
+      {
+        id: 'over-21',
+        fromNode: 'client',
+        toNode: 'cdn',
+        edgeId: 'e-client-cdn',
+        type: 'request',
+        title: '🔄 Новый запрос (другой user)',
+        description: 'Premium пользователь с высоким лимитом',
+        detailedInfo: `НОВЫЙ КЛИЕНТ: user_789 (Premium)
+
+У premium пользователей лимит выше:
+• POST /orders: 100 req/min
+• Текущий count: 5
+• Rate limit: OK ✓
+
+Но сервисы всё ещё перегружены...`,
+        duration: 2000,
+        realLatency: 8,
+        payload: { userId: 'user_789', tier: 'premium', rateLimit: 'OK' },
+      },
+      {
+        id: 'over-22',
+        fromNode: 'cdn',
+        toNode: 'global-lb',
+        edgeId: 'e-cdn-global-lb',
+        type: 'request',
+        title: 'CDN → Global LB',
+        description: 'Запрос на origin',
+        detailedInfo: `Запрос проходит через CDN без изменений.`,
+        duration: 1600,
+        realLatency: 3,
+        payload: {},
+      },
+      {
+        id: 'over-23',
+        fromNode: 'global-lb',
+        toNode: 'dc-eu',
+        edgeId: 'e-global-lb-dc-eu',
+        type: 'request',
+        title: 'Global LB → EU DC',
+        description: 'Направлен в EU DC',
+        detailedInfo: `EU DC по-прежнему primary для POST.`,
+        duration: 1600,
+        realLatency: 2,
+        payload: {},
+      },
+      {
+        id: 'over-24',
+        fromNode: 'dc-eu',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb',
+        type: 'request',
+        title: 'DC → Regional LB',
+        description: 'Вход в DC',
+        detailedInfo: `Regional LB принимает запрос.`,
+        duration: 800,
+        realLatency: 1,
+        payload: {},
+      },
+      {
+        id: 'over-25',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-lb-gw',
+        type: 'request',
+        title: 'LB → API Gateway',
+        description: 'На API Gateway',
+        detailedInfo: `API Gateway обработает auth и rate limit.`,
+        duration: 1000,
+        realLatency: 2,
+        payload: {},
+      },
+      {
+        id: 'over-26',
+        fromNode: 'dc-eu-gw',
+        toNode: 'dc-eu-ratelimit',
+        edgeId: 'e-dc-eu-gw-ratelimit',
+        type: 'request',
+        title: 'Rate Limit Check',
+        description: 'Проверка лимитов',
+        detailedInfo: `Premium user: лимит 100 req/min
+Текущий count: 6
+Результат: OK ✓`,
+        duration: 400,
+        realLatency: 1,
+        payload: { userId: 'user_789', current: 6, limit: 100 },
+      },
+      {
+        id: 'over-27',
+        fromNode: 'dc-eu-ratelimit',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-gw-ratelimit',
+        reverse: true,
+        type: 'response',
+        title: '✅ Rate Limit OK',
+        description: 'Лимит не превышен',
+        detailedInfo: `Premium пользователь проходит rate limit.
+
+Но впереди ещё Circuit Breaker...`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { allowed: true, remaining: 94 },
+      },
+      {
+        id: 'over-28',
+        fromNode: 'dc-eu-gw',
+        toNode: 'dc-eu-ingress',
+        edgeId: 'e-dc-eu-gw-ingress',
+        type: 'request',
+        title: 'API GW → K8s Ingress',
+        description: 'Маршрутизация в Kubernetes',
+        detailedInfo: `Запрос идёт в Kubernetes кластер.
+
+K8s тоже под нагрузкой:
+• Pod CPU: 90%
+• Pending pods в очереди
+• HPA масштабирует, но не успевает`,
+        duration: 800,
+        realLatency: 2,
+        payload: { clusterLoad: 'high' },
+      },
+      {
+        id: 'over-29',
+        fromNode: 'dc-eu-ingress',
+        toNode: 'dc-eu-order-svc',
+        edgeId: 'e-dc-eu-ingress-order-svc',
+        type: 'request',
+        title: 'Ingress → Order Service',
+        description: 'Роутинг на Order Service',
+        detailedInfo: `NGINX Ingress направляет на Order Service.
+
+ORDER SERVICE СТАТУС:
+• Replicas: 10 (scaled up from 3)
+• Ready: 7 (3 ещё стартуют)
+• Error rate: 45% (высокий!)`,
+        duration: 600,
+        realLatency: 1,
+        payload: { replicas: 10, ready: 7, errorRate: '45%' },
+      },
+      {
+        id: 'over-30',
+        fromNode: 'dc-eu-order-svc',
+        toNode: 'dc-eu-order-pod',
+        edgeId: 'e-dc-eu-order-svc-pod',
+        type: 'request',
+        title: 'Service → Order Pod (Envoy)',
+        description: 'Запрос идёт через Envoy sidecar',
+        detailedInfo: `⚠️ ENVOY CIRCUIT BREAKER АКТИВЕН!
+
+ENVOY ВИДИТ:
+• Error rate за 10 сек: 52%
+• Threshold: 50%
+• Circuit state: OPEN 🔴
+
+CIRCUIT BREAKER КОНФИГУРАЦИЯ:
+• consecutive5xxResponses: 5
+• interval: 10s
+• baseEjectionTime: 30s
+• maxEjectionPercent: 50%
+
+Когда error rate > 50%, Envoy прекращает
+отправлять запросы на перегруженные pods.`,
+        duration: 400,
+        realLatency: 0.5,
+        payload: { circuitState: 'OPEN', errorRate: '52%', threshold: '50%' },
+      },
+      {
+        id: 'over-31',
+        fromNode: 'dc-eu-order-pod',
+        toNode: 'dc-eu-istiod',
+        edgeId: 'e-dc-eu-istiod-order',
+        reverse: true,
+        type: 'request',
+        title: '🔴 Circuit Breaker CHECK',
+        description: 'Envoy проверяет состояние circuit',
+        detailedInfo: `ENVOY SIDECAR РЕШАЕТ:
+
+1. Проверяет локальный circuit state
+2. State = OPEN (открыт из-за высокого error rate)
+3. Последний успешный запрос: 15 сек назад
+4. Cooldown: ещё 15 сек до half-open
+
+РЕШЕНИЕ: Немедленно вернуть 503
+БЕЗ отправки запроса в Order Service!
+
+ПАТТЕРН: Circuit Breaker (Envoy/Istio)
+Защищает от cascade failures.`,
+        duration: 200,
+        realLatency: 0.1,
+        payload: { circuitState: 'OPEN', action: 'REJECT', reason: 'circuit_open' },
+      },
+      {
+        id: 'over-32',
+        fromNode: 'dc-eu-istiod',
+        toNode: 'dc-eu-order-pod',
+        edgeId: 'e-dc-eu-istiod-order',
+        type: 'response',
+        title: '🔴 Circuit OPEN',
+        description: 'Запрос отклонён без вызова сервиса',
+        detailedInfo: `ISTIOD/ENVOY:
+
+Circuit Breaker в состоянии OPEN.
+Запрос НЕ будет отправлен в Order Service!
+
+ПОЧЕМУ ЭТО ХОРОШО:
+• Не добавляем нагрузку на умирающий сервис
+• Быстрый ответ клиенту (~1ms vs ~30s timeout)
+• Даём сервису время восстановиться
+
+СОСТОЯНИЯ CIRCUIT BREAKER:
+🟢 CLOSED: всё ОК, запросы идут
+🟡 HALF-OPEN: пробуем 1 запрос
+🔴 OPEN: все запросы отклоняются`,
+        duration: 100,
+        realLatency: 0.1,
+        payload: { circuitState: 'OPEN', nextRetry: '15s' },
+      },
+      {
+        id: 'over-33',
+        fromNode: 'dc-eu-order-pod',
+        toNode: 'dc-eu-order-svc',
+        edgeId: 'e-dc-eu-order-svc-pod',
+        reverse: true,
+        type: 'response',
+        title: '❌ 503 Service Unavailable',
+        description: 'Envoy возвращает ошибку',
+        detailedInfo: `ENVOY RESPONSE:
+
+HTTP/1.1 503 Service Unavailable
+x-envoy-overloaded: true
+x-circuit-state: open
+
+{
+  "error": "service_unavailable",
+  "reason": "circuit_breaker_open",
+  "retryAfter": 15
+}
+
+Это НЕ timeout — это быстрый отказ!`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { status: 503, reason: 'circuit_breaker_open' },
+      },
+
+      // ========== OBSERVABILITY ==========
+      {
+        id: 'over-34',
+        fromNode: 'dc-eu-order-pod',
+        toNode: 'dc-eu-prometheus',
+        edgeId: 'e-dc-eu-pods-prometheus',
+        type: 'async',
+        title: '📊 Metrics Export',
+        description: 'Метрики Circuit Breaker в Prometheus',
+        detailedInfo: `МЕТРИКИ ОТПРАВЛЕНЫ:
+
+envoy_cluster_circuit_breakers_default_cx_open{cluster="order-service"} 1
+envoy_cluster_upstream_rq_503{cluster="order-service"} ++
+order_service_requests_total{status="503"} ++
+order_service_circuit_breaker_state{state="open"} 1
+
+АЛЕРТЫ СРАБОТАЛИ:
+🚨 CircuitBreakerOpen - Order Service
+🚨 HighErrorRate - Order Service > 50%
+🚨 ServiceDegraded - EU DC
+
+PagerDuty уведомил on-call инженера.`,
+        duration: 200,
+        realLatency: 1,
+        payload: { circuitBreakerOpen: true, alerts: ['CircuitBreakerOpen', 'HighErrorRate'] },
+      },
+      {
+        id: 'over-35',
+        fromNode: 'dc-eu-order-pod',
+        toNode: 'dc-eu-jaeger',
+        edgeId: 'e-dc-eu-pods-jaeger',
+        type: 'async',
+        title: '📊 Failed Trace',
+        description: 'Trace span с ошибкой в Jaeger',
+        detailedInfo: `TRACE ЗАПИСАН:
+
+{
+  "traceId": "abc123",
+  "spanId": "xyz789",
+  "operationName": "order-service.createOrder",
+  "status": "ERROR",
+  "error": true,
+  "tags": {
+    "http.status_code": 503,
+    "error.type": "circuit_breaker_open",
+    "envoy.circuit_state": "open"
+  },
+  "duration": "2ms"
+}
+
+Инженер может найти этот trace и понять причину.`,
+        duration: 200,
+        realLatency: 1,
+        payload: { traceId: 'abc123', error: true, duration: '2ms' },
+      },
+
+      // ========== ERROR RESPONSE PATH ==========
+      {
+        id: 'over-36',
+        fromNode: 'dc-eu-order-svc',
+        toNode: 'dc-eu-ingress',
+        edgeId: 'e-dc-eu-ingress-order-svc',
+        reverse: true,
+        type: 'response',
+        title: 'Error → Ingress',
+        description: '503 идёт обратно',
+        detailedInfo: `NGINX Ingress логирует 503.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: { statusCode: 503 },
+      },
+      {
+        id: 'over-37',
+        fromNode: 'dc-eu-ingress',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-gw-ingress',
+        reverse: true,
+        type: 'response',
+        title: 'Ingress → API Gateway',
+        description: '503 через API Gateway',
+        detailedInfo: `API Gateway видит 503 от backend.
+
+Может добавить:
+• Retry-After header
+• Fallback response (если есть)`,
+        duration: 200,
+        realLatency: 1,
+        payload: {},
+      },
+      {
+        id: 'over-38',
+        fromNode: 'dc-eu-gw',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb-gw',
+        reverse: true,
+        type: 'response',
+        title: 'API GW → Regional LB',
+        description: '503 через LB',
+        detailedInfo: `HAProxy видит 503 — сервис degraded.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: {},
+      },
+      {
+        id: 'over-39',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu',
+        edgeId: 'e-dc-eu-lb',
+        reverse: true,
+        type: 'response',
+        title: 'LB → DC Border',
+        description: '503 выходит из DC',
+        detailedInfo: `Ошибка покидает датацентр.`,
+        duration: 200,
+        realLatency: 0.5,
+        payload: {},
+      },
+      {
+        id: 'over-40',
+        fromNode: 'dc-eu',
+        toNode: 'global-lb',
+        edgeId: 'e-global-lb-dc-eu',
+        reverse: true,
+        type: 'response',
+        title: 'DC → Global LB',
+        description: '503 на Global LB',
+        detailedInfo: `GLB видит 503 от EU DC.
+
+⚠️ Много 503 = health degradation
+GLB может начать отводить трафик на другие ДЦ.`,
+        duration: 400,
+        realLatency: 1,
+        payload: { dcHealth: 'degraded' },
+      },
+      {
+        id: 'over-41',
+        fromNode: 'global-lb',
+        toNode: 'cdn',
+        edgeId: 'e-cdn-global-lb',
+        reverse: true,
+        type: 'response',
+        title: 'Global LB → CDN',
+        description: '503 на CDN',
+        detailedInfo: `CDN не кэширует 503 ответы.`,
+        duration: 400,
+        realLatency: 3,
+        payload: {},
+      },
+      {
+        id: 'over-42',
+        fromNode: 'cdn',
+        toNode: 'client',
+        edgeId: 'e-client-cdn',
+        reverse: true,
+        type: 'response',
+        title: '❌ 503 → Client',
+        description: 'Клиент получает ошибку сервиса',
+        detailedInfo: `КЛИЕНТ ПОЛУЧАЕТ:
+
+HTTP/1.1 503 Service Unavailable
+Retry-After: 15
+x-envoy-overloaded: true
+
+{
+  "error": "service_unavailable",
+  "message": "Service is temporarily overloaded. Please retry.",
+  "retryAfter": 15
+}
+
+📱 ЧТО ДОЛЖЕН СДЕЛАТЬ КЛИЕНТ:
+1. Показать "Сервис перегружен, попробуйте позже"
+2. Exponential backoff: 1s, 2s, 4s, 8s...
+3. Может предложить оффлайн-режим
+
+⏱️ ВРЕМЯ ОТВЕТА: ~80ms
+(Быстро благодаря Circuit Breaker!)
+
+БЕЗ Circuit Breaker:
+• Запрос висел бы 30 секунд
+• Потом timeout
+• Пользователь уже ушёл
+
+📊 ИТОГИ СЦЕНАРИЯ:
+1. Rate Limiter защитил от abuse (429)
+2. Circuit Breaker защитил от cascade failure (503)
+3. Observability: метрики, трейсы, алерты
+4. Быстрые ответы: 50-80ms вместо 30s timeout`,
+        duration: 1200,
+        realLatency: 10,
+        payload: {
+          status: 503,
+          message: 'Service temporarily overloaded',
+          retryAfter: 15,
+          patterns: ['Rate Limiting', 'Circuit Breaker', 'Backpressure', 'Fast Fail']
+        },
+      },
+    ],
+  },
 ]

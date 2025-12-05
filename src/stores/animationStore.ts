@@ -58,7 +58,7 @@ export const useAnimationStore = create<AnimationStore>((set) => ({
   currentDuration: null,
   nodeStats: {},
   completedSteps: [],
-  autoFocusEnabled: false,
+  autoFocusEnabled: true,
 
   play: () => set({ playbackState: 'playing' }),
   pause: () => set({ playbackState: 'paused' }),
