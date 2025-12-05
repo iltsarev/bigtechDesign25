@@ -464,6 +464,53 @@ SAGA Choreography — сервисы подписаны на нужные topics
         payload: { topic: 'orders.created', key: 'order_789', partition: 3 },
       },
 
+      // ========== SCHEMA VALIDATION ==========
+      {
+        id: 'step-21a',
+        fromNode: 'dc-eu-kafka',
+        toNode: 'dc-eu-schema-registry',
+        edgeId: 'e-dc-eu-kafka-schema',
+        type: 'request',
+        title: 'Schema Validation',
+        description: 'Kafka проверяет схему события в Schema Registry',
+        detailedInfo: `ЗАЧЕМ: Гарантировать что все producers и consumers используют совместимые схемы.
+
+ЧТО ПРОИСХОДИТ:
+1. Producer сериализует событие в Avro/Protobuf формат
+2. Kafka отправляет schema fingerprint в Schema Registry
+3. Registry проверяет: существует ли схема? совместима ли с предыдущими версиями?
+4. Если схема новая — регистрирует с новым schema_id
+
+ПАТТЕРН: Schema Registry — централизованное управление контрактами.
+Backward/Forward Compatibility — защита от breaking changes.`,
+        duration: 400,
+        realLatency: 2,
+        payload: { schemaType: 'AVRO', subject: 'orders.created-value', action: 'validate' },
+      },
+      {
+        id: 'step-21b',
+        fromNode: 'dc-eu-schema-registry',
+        toNode: 'dc-eu-kafka',
+        edgeId: 'e-dc-eu-kafka-schema',
+        reverse: true,
+        type: 'response',
+        title: 'Schema Valid (ID: 42)',
+        description: 'Schema Registry подтверждает валидность схемы',
+        detailedInfo: `ЗАЧЕМ: Разрешить запись сообщения в topic.
+
+ЧТО ПРОИСХОДИТ:
+1. Schema Registry вернул schema_id=42
+2. Этот ID записывается в header сообщения
+3. Consumers используют schema_id для десериализации
+4. Сообщение записано в partition 3
+
+ПАТТЕРН: Schema Evolution — версионирование схем.
+Consumers могут читать старые сообщения новой схемой (и наоборот).`,
+        duration: 200,
+        realLatency: 1,
+        payload: { schemaId: 42, version: 3, compatible: true },
+      },
+
       // ========== SAGA: INVENTORY ==========
       {
         id: 'step-22',
@@ -782,6 +829,64 @@ SAGA успешно завершена!`,
         payload: { email: 'john@example.com', name: 'John Doe' },
       },
 
+      // ========== OBSERVABILITY ==========
+      {
+        id: 'step-36a',
+        fromNode: 'dc-eu-order-pod',
+        toNode: 'dc-eu-jaeger',
+        edgeId: 'e-dc-eu-pods-jaeger',
+        type: 'async',
+        title: 'Report Trace Spans',
+        description: 'Envoy sidecar отправляет trace spans в Jaeger',
+        detailedInfo: `ЗАЧЕМ: Distributed Tracing — отслеживание запроса через все сервисы.
+
+ЧТО ПРОИСХОДИТ:
+1. Каждый sidecar собирает spans: start_time, duration, status
+2. Spans связаны через traceId (X-Trace-Id из headers)
+3. Батчами отправляются в Jaeger collector
+4. Jaeger строит полную картину запроса
+
+ПАТТЕРН: Distributed Tracing (OpenTelemetry/Jaeger).
+Позволяет найти bottlenecks и понять latency breakdown.
+
+TRACE SPANS В ЭТОМ ЗАПРОСЕ:
+• API Gateway: 2ms
+• Auth Service: 1.5ms
+• Order Service: 1200ms (DB + Kafka)
+• User Service: 5ms (cache hit)
+Total: ~1.5s`,
+        duration: 200,
+        realLatency: 1,
+        payload: { traceId: 'trace_abc123', totalSpans: 12, services: ['api-gw', 'auth', 'order', 'user', 'inventory', 'payment'] },
+      },
+      {
+        id: 'step-36b',
+        fromNode: 'dc-eu-order-pod',
+        toNode: 'dc-eu-prometheus',
+        edgeId: 'e-dc-eu-pods-prometheus',
+        type: 'async',
+        title: 'Export Metrics',
+        description: 'Prometheus scrapes метрики с /metrics endpoint',
+        detailedInfo: `ЗАЧЕМ: Мониторинг и alerting — SRE должны видеть здоровье системы.
+
+ЧТО ПРОИСХОДИТ:
+1. Envoy sidecar экспортирует метрики на :15090/stats/prometheus
+2. Prometheus каждые 15 сек делает scrape всех pods
+3. Метрики записываются в time-series DB
+
+КЛЮЧЕВЫЕ МЕТРИКИ:
+• request_duration_seconds{service="order"} = 1.2
+• request_total{service="order", status="201"} ++
+• kafka_producer_messages_total{topic="orders.created"} ++
+• db_query_duration_seconds{query="insert_order"} = 0.025
+
+ПАТТЕРН: RED Metrics (Rate, Errors, Duration).
+SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
+        duration: 100,
+        realLatency: 0,
+        payload: { metricsExported: ['request_duration', 'request_total', 'error_rate'], scrapeInterval: '15s' },
+      },
+
       // ========== RESPONSE TO CLIENT (обратный путь) ==========
       {
         id: 'step-37',
@@ -1065,6 +1170,48 @@ Trade-off: consistency vs latency.`,
         duration: 1600,
         realLatency: 50,
         payload: { targetRegion: 'ap-southeast-1', totalLag: '~200ms', distance: '~10000km' },
+      },
+
+      // ========== ERROR HANDLING: DLQ ==========
+      {
+        id: 'step-50',
+        fromNode: 'dc-eu-kafka',
+        toNode: 'dc-eu-dlq',
+        edgeId: 'e-dc-eu-kafka-dlq',
+        type: 'async',
+        title: '[Error Path] Dead Letter Queue',
+        description: 'Что происходит при ошибке обработки сообщения',
+        detailedInfo: `ЗАЧЕМ: Не потерять сообщения при ошибках обработки.
+
+⚠️ ЭТО ERROR PATH — в успешном сценарии не происходит!
+
+КОГДА СРАБАТЫВАЕТ:
+1. Consumer не смог обработать сообщение (exception)
+2. Retry policy: 3 попытки с exponential backoff (1s, 2s, 4s)
+3. После 3 failed retries → сообщение идёт в DLQ
+
+ЧТО ПРОИСХОДИТ:
+1. Kafka перемещает сообщение в topic: orders.created.dlq
+2. Alert в PagerDuty: "DLQ message count > 0"
+3. On-call engineer разбирается с причиной
+4. После fix — replay сообщений из DLQ
+
+ТИПИЧНЫЕ ПРИЧИНЫ ОШИБОК:
+• Невалидные данные (schema mismatch)
+• Timeout при обращении к внешнему сервису
+• Database constraint violation
+• Bug в consumer коде
+
+ПАТТЕРН: Dead Letter Queue — изоляция проблемных сообщений.
+Позволяет системе продолжать работу несмотря на ошибки.`,
+        duration: 400,
+        realLatency: 5,
+        payload: {
+          dlqTopic: 'orders.created.dlq',
+          retryPolicy: { maxRetries: 3, backoff: 'exponential' },
+          alertChannel: 'pagerduty',
+          note: 'This step only occurs on processing failures'
+        },
       },
     ],
   },
