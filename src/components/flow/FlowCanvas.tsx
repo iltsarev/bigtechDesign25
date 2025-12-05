@@ -14,6 +14,8 @@ import { nodeTypes } from './nodes'
 import { edgeTypes } from './edges'
 import { allNodes, allEdges } from '../../data/architecture'
 import { useAnimationStore } from '../../stores/animationStore'
+import { useNodeInfoStore } from '../../stores/nodeInfoStore'
+import { NodeType } from '../../types'
 
 // Компонент для автофокуса на активные ноды
 function AutoFocusController() {
@@ -56,9 +58,15 @@ function FlowCanvasInner() {
   const [nodes, , onNodesChange] = useNodesState(initialNodes)
   const [edges, , onEdgesChange] = useEdgesState(initialEdges)
 
+  const selectNode = useNodeInfoStore((s) => s.selectNode)
+
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    console.log('Node clicked:', node.id, node.data)
-  }, [])
+    selectNode({
+      id: node.id,
+      type: node.type as NodeType,
+      data: node.data,
+    })
+  }, [selectNode])
 
   return (
     <div className="w-full h-full">

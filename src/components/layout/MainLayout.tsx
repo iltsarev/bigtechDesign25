@@ -3,6 +3,7 @@ import FlowCanvas from '../flow/FlowCanvas'
 import PlaybackControls from '../controls/PlaybackControls'
 import ScenarioSelector from '../controls/ScenarioSelector'
 import InfoPanel from '../panels/InfoPanel'
+import NodeInfoPanel from '../panels/NodeInfoPanel'
 import LegendPanel from '../panels/LegendPanel'
 import TimelinePanel from '../panels/TimelinePanel'
 import { ChevronUp, ChevronDown } from 'lucide-react'
@@ -172,6 +173,7 @@ export default function MainLayout() {
         {/* Right sidebar */}
         <aside className="w-96 bg-gray-50 border-l border-gray-200 p-4 overflow-y-auto">
           <div className="space-y-4">
+            <NodeInfoPanel />
             <InfoPanel />
             <LegendPanel />
           </div>
