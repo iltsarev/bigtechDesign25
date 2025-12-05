@@ -35,6 +35,7 @@ export default function PlaybackControls() {
     currentStepIndex,
     speed,
     autoFocusEnabled,
+    particleProgress,
     play,
     pause,
     stop,
@@ -54,6 +55,18 @@ export default function PlaybackControls() {
   const { getCurrentScenario, getCurrentStep, getTotalSteps } = useScenarioStore()
   const animationRef = useRef<number | null>(null)
   const progressRef = useRef(0)
+  const resumeProgressRef = useRef(0)
+
+  // Сохраняем progress при паузе для resume
+  const prevPlaybackStateRef = useRef(playbackState)
+  if (prevPlaybackStateRef.current === 'playing' && playbackState === 'paused') {
+    // Запоминаем progress при паузе
+    resumeProgressRef.current = particleProgress
+  } else if (prevPlaybackStateRef.current !== 'playing' && playbackState === 'playing') {
+    // При начале воспроизведения используем сохранённый progress (если есть)
+    // или 0 для нового воспроизведения
+  }
+  prevPlaybackStateRef.current = playbackState
 
   const totalSteps = getTotalSteps()
   const currentStep = getCurrentStep(currentStepIndex)
@@ -84,12 +97,17 @@ export default function PlaybackControls() {
     setCurrentStepInfo(step.type, protocol, step.realLatency)
 
     const duration = step.duration / speed
+    // При resume используем сохранённый progress, иначе начинаем с 0
+    const initialProgress = resumeProgressRef.current > 0 && resumeProgressRef.current < 1
+      ? resumeProgressRef.current
+      : 0
+    resumeProgressRef.current = 0 // Сбрасываем после использования
     const startTime = performance.now()
-    progressRef.current = 0
+    progressRef.current = initialProgress
 
     const animate = (currentTime: number) => {
       const elapsed = currentTime - startTime
-      const progress = Math.min(elapsed / duration, 1)
+      const progress = Math.min(initialProgress + (elapsed / duration), 1)
       progressRef.current = progress
       setParticleProgress(progress)
 
@@ -133,6 +151,7 @@ export default function PlaybackControls() {
       const nextIndex = currentStepIndex + 1
       const step = getCurrentStep(nextIndex)
       if (step) {
+        resumeProgressRef.current = 0 // Сбрасываем при ручном переходе
         stepForward()
         const edgeId = step.edgeId || `e-${step.fromNode}-${step.toNode}`
         setActiveEdge(edgeId, step.reverse || false)
@@ -148,6 +167,7 @@ export default function PlaybackControls() {
       const prevIndex = currentStepIndex - 1
       const step = getCurrentStep(prevIndex)
       if (step) {
+        resumeProgressRef.current = 0 // Сбрасываем при ручном переходе
         stepBackward()
         const edgeId = step.edgeId || `e-${step.fromNode}-${step.toNode}`
         setActiveEdge(edgeId, step.reverse || false)
@@ -161,6 +181,7 @@ export default function PlaybackControls() {
   const handleJumpToStart = () => {
     const step = getCurrentStep(0)
     if (step) {
+      resumeProgressRef.current = 0 // Сбрасываем при ручном переходе
       setStep(0)
       const edgeId = step.edgeId || `e-${step.fromNode}-${step.toNode}`
       setActiveEdge(edgeId, step.reverse || false)
@@ -175,6 +196,7 @@ export default function PlaybackControls() {
     if (lastIndex >= 0) {
       const step = getCurrentStep(lastIndex)
       if (step) {
+        resumeProgressRef.current = 0 // Сбрасываем при ручном переходе
         setStep(lastIndex)
         const edgeId = step.edgeId || `e-${step.fromNode}-${step.toNode}`
         setActiveEdge(edgeId, step.reverse || false)
