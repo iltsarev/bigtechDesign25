@@ -42,12 +42,12 @@ API Gateway → Auth Service → Redis (Session Store)
 ### Фаза 3: Rate Limiting
 
 ```
-API Gateway → Rate Limiter → Redis (Counters)
+Regional LB → Rate Limiter → Redis (Counters)
 ```
 
 **Ключевые паттерны:**
 - **Token Bucket** — алгоритм ограничения запросов
-- **Distributed Rate Limiting** — единый счётчик для всех инстансов API Gateway
+- **Distributed Rate Limiting** — единый счётчик для всех инстансов балансировщика
 - **Sliding Window** — окно 60 секунд с атомарным INCR в Redis
 
 **Лимиты:**
@@ -103,7 +103,8 @@ EU DC → Kafka (Cross-DC) → US DC, Asia DC
 | DNS | Service Discovery | Route 53, Cloudflare |
 | CDN | Edge Caching, WAF | Cloudflare, Fastly |
 | Global LB | Geo-routing | Google Cloud LB, AWS GLB |
-| API Gateway | Auth, Rate Limit, Routing | Kong, Envoy |
+| Regional LB | Rate Limit, Load Balancing | HAProxy, Envoy |
+| API Gateway | Auth, Routing | Kong, Envoy |
 | Kubernetes | Container Orchestration | K8s, EKS, GKE |
 | Kafka | Event Streaming | Apache Kafka, Confluent |
 | Redis | Session, Cache, Rate Limit | Redis Cluster |

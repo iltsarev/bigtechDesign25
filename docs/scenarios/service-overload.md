@@ -37,10 +37,10 @@ Client → CDN (первая линия защиты)
 
 **Результат:** Отсекается ~20% нелегитимного трафика
 
-### Уровень 2: API Gateway Rate Limiting
+### Уровень 2: Load Balancer Rate Limiting
 
 ```
-API Gateway → Rate Limiter → Redis
+Regional LB → Rate Limiter → Redis
 ```
 
 **Алгоритм: Token Bucket**
