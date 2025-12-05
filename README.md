@@ -96,7 +96,7 @@ npm run build
 Клиент → DNS → CDN → Global LB → Data Centers (EU, US, Asia)
 
 ### Datacenter Level
-Regional LB → API Gateway → Auth → Rate Limiter → K8s Cluster
+Regional LB → Rate Limiter → API Gateway → Auth → K8s Cluster
 
 ### Cluster Level
 Ingress → Services → Pods → Sidecars → Cache/DB/Kafka
