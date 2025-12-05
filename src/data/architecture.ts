@@ -71,7 +71,7 @@ export const allNodes: ArchNode[] = [
     position: { x: 1250, y: 50 },
     data: {
       label: 'Regional LB',
-      description: 'Load Balancer L4/L7 — балансировка внутри ДЦ',
+      description: 'Load Balancer L4/L7 — балансировка + rate limiting',
       technology: 'HAProxy',
       viewLevel: 'datacenter',
     },
@@ -82,7 +82,7 @@ export const allNodes: ArchNode[] = [
     position: { x: 1500, y: 50 },
     data: {
       label: 'API Gateway',
-      description: 'API Gateway — единая точка входа, routing, rate limiting',
+      description: 'API Gateway — единая точка входа, auth, routing',
       technology: 'Kong',
       viewLevel: 'datacenter',
     },
@@ -304,7 +304,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-ratelimit',
     type: 'rateLimiter',
-    position: { x: 1500, y: 180 },
+    position: { x: 1250, y: 180 },
     data: {
       label: 'Rate Limiter',
       description: 'Distributed Rate Limiting — защита от перегрузки',
@@ -366,7 +366,7 @@ export const allNodes: ArchNode[] = [
     position: { x: 1250, y: 700 },
     data: {
       label: 'Regional LB',
-      description: 'Load Balancer L4/L7 — балансировка внутри ДЦ',
+      description: 'Load Balancer L4/L7 — балансировка + rate limiting',
       technology: 'HAProxy',
       viewLevel: 'datacenter',
     },
@@ -489,7 +489,7 @@ export const allNodes: ArchNode[] = [
     position: { x: 1250, y: 1200 },
     data: {
       label: 'Regional LB',
-      description: 'Load Balancer L4/L7 — балансировка внутри ДЦ',
+      description: 'Load Balancer L4/L7 — балансировка + rate limiting',
       technology: 'HAProxy',
       viewLevel: 'datacenter',
     },
@@ -626,7 +626,7 @@ export const allEdges: ArchEdge[] = [
   { id: 'e-dc-eu-lb-gw', source: 'dc-eu-lb', target: 'dc-eu-gw' },
   { id: 'e-dc-eu-gw-auth', source: 'dc-eu-gw', target: 'dc-eu-auth' },
   { id: 'e-dc-eu-auth-session', source: 'dc-eu-auth', target: 'dc-eu-session' },
-  { id: 'e-dc-eu-gw-ratelimit', source: 'dc-eu-gw', target: 'dc-eu-ratelimit' },
+  { id: 'e-dc-eu-lb-ratelimit', source: 'dc-eu-lb', target: 'dc-eu-ratelimit' },
   { id: 'e-dc-eu-ratelimit-cache', source: 'dc-eu-ratelimit', target: 'dc-eu-cache', style: { strokeDasharray: '4,4' } },
   { id: 'e-dc-eu-gw-ingress', source: 'dc-eu-gw', target: 'dc-eu-ingress' },
 

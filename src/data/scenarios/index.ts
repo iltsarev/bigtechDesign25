@@ -251,12 +251,12 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
       // ========== RATE LIMITING ==========
       {
         id: 'step-12',
-        fromNode: 'dc-eu-gw',
+        fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-gw-ratelimit',
+        edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
         title: 'Rate Limit Check',
-        description: 'API Gateway проверяет лимиты запросов',
+        description: 'Load Balancer проверяет лимиты запросов',
         detailedInfo: `ЗАЧЕМ: Защита от перегрузки и DDoS, fair usage между пользователями.
 
 ЧТО ПРОИСХОДИТ:
@@ -265,7 +265,7 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
 3. Применяет Token Bucket алгоритм
 4. Лимиты: 100 req/min для обычных пользователей
 
-ПАТТЕРН: Distributed Rate Limiting — единый счётчик для всех инстансов.`,
+ПАТТЕРН: Distributed Rate Limiting — единый счётчик для всех инстансов балансировщика.`,
         duration: 400,
         realLatency: 1,
         payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 45, limit: 100 },
@@ -278,7 +278,7 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         type: 'request',
         title: 'Rate Limiter → Redis',
         description: 'Проверка и инкремент счётчика в Redis',
-        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех API Gateway инстансов.
+        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов балансировщика.
 
 ЧТО ПРОИСХОДИТ:
 1. INCR rate:user_123:orders (атомарный инкремент)
@@ -314,20 +314,20 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
       {
         id: 'step-15',
         fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-gw',
-        edgeId: 'e-dc-eu-gw-ratelimit',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb-ratelimit',
         reverse: true,
         type: 'response',
         title: 'Rate Limit Passed',
         description: 'Rate Limiter разрешает запрос',
-        detailedInfo: `ЗАЧЕМ: API Gateway должен знать результат проверки.
+        detailedInfo: `ЗАЧЕМ: Load Balancer должен знать результат проверки.
 
 ЧТО ПРОИСХОДИТ:
 1. Rate Limiter возвращает OK
-2. API Gateway добавляет rate limit headers в response
-3. Запрос продолжает путь в Kubernetes
+2. LB добавляет rate limit headers в response
+3. Запрос продолжает путь к API Gateway
 
-ПАТТЕРН: API Gateway как Policy Enforcement Point.`,
+ПАТТЕРН: Load Balancer как Policy Enforcement Point.`,
         duration: 160,
         realLatency: 0.5,
         payload: { status: 'allowed' },
@@ -1882,12 +1882,12 @@ Permissions: orders:create
       // ========== RATE LIMITING — ОТКАЗ ==========
       {
         id: 'over-12',
-        fromNode: 'dc-eu-gw',
+        fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-gw-ratelimit',
+        edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
         title: '⚠️ Rate Limit Check',
-        description: 'Проверка лимитов запросов',
+        description: 'Load Balancer проверяет лимиты запросов',
         detailedInfo: `ЗАЧЕМ: Защитить backend от перегрузки.
 
 ЛИМИТЫ ДЛЯ user_456:
@@ -1951,8 +1951,8 @@ Permissions: orders:create
       {
         id: 'over-15',
         fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-gw',
-        edgeId: 'e-dc-eu-gw-ratelimit',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb-ratelimit',
         reverse: true,
         type: 'response',
         title: '❌ 429 Too Many Requests',
@@ -2157,12 +2157,12 @@ X-RateLimit-Remaining: 0
       },
       {
         id: 'over-26',
-        fromNode: 'dc-eu-gw',
+        fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-gw-ratelimit',
+        edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
         title: 'Rate Limit Check',
-        description: 'Проверка лимитов',
+        description: 'Load Balancer проверяет лимиты',
         detailedInfo: `Premium user: лимит 100 req/min
 Текущий count: 6
 Результат: OK ✓`,
@@ -2173,8 +2173,8 @@ X-RateLimit-Remaining: 0
       {
         id: 'over-27',
         fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-gw',
-        edgeId: 'e-dc-eu-gw-ratelimit',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb-ratelimit',
         reverse: true,
         type: 'response',
         title: '✅ Rate Limit OK',
