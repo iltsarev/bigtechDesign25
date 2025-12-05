@@ -135,8 +135,93 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         duration: 800,
         realLatency: 1,
       },
+
+      // ========== RATE LIMITING ==========
       {
         id: 'step-7',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu-ratelimit',
+        edgeId: 'e-dc-eu-lb-ratelimit',
+        type: 'request',
+        title: 'Rate Limit Check',
+        description: 'Load Balancer проверяет лимиты запросов',
+        detailedInfo: `ЗАЧЕМ: Защита от перегрузки и DDoS, fair usage между пользователями.
+
+ЧТО ПРОИСХОДИТ:
+1. Rate Limiter получает запрос
+2. Проверяет Redis: текущий счётчик по IP/User
+3. Применяет Token Bucket алгоритм
+4. Лимиты: 100 req/min для обычных пользователей
+
+ПАТТЕРН: Distributed Rate Limiting — единый счётчик для всех инстансов балансировщика.`,
+        duration: 400,
+        realLatency: 1,
+        payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 45, limit: 100 },
+      },
+      {
+        id: 'step-8',
+        fromNode: 'dc-eu-ratelimit',
+        toNode: 'dc-eu-cache',
+        edgeId: 'e-dc-eu-ratelimit-cache',
+        type: 'request',
+        title: 'Rate Limiter → Redis',
+        description: 'Проверка и инкремент счётчика в Redis',
+        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов балансировщика.
+
+ЧТО ПРОИСХОДИТ:
+1. INCR rate:user_123:orders (атомарный инкремент)
+2. EXPIRE устанавливает TTL=60 сек (sliding window)
+3. Если счётчик > limit → возврат 429 Too Many Requests
+
+ПАТТЕРН: Sliding Window Rate Limiting в Redis.`,
+        duration: 240,
+        realLatency: 0.5,
+        payload: { key: 'rate:user_123:orders', operation: 'INCR', ttl: 60 },
+      },
+      {
+        id: 'step-9',
+        fromNode: 'dc-eu-cache',
+        toNode: 'dc-eu-ratelimit',
+        edgeId: 'e-dc-eu-ratelimit-cache',
+        reverse: true,
+        type: 'response',
+        title: 'Rate Limit OK',
+        description: 'Redis подтверждает что лимит не превышен',
+        detailedInfo: `ЗАЧЕМ: Разрешить или заблокировать запрос.
+
+ЧТО ПРОИСХОДИТ:
+1. Redis вернул текущее значение счётчика: 46
+2. 46 < 100 (лимит) → запрос разрешён
+3. Добавляются headers: X-RateLimit-Remaining: 54
+
+РЕЗУЛЬТАТ: Запрос прошёл rate limiting.`,
+        duration: 160,
+        realLatency: 0.1,
+        payload: { allowed: true, current: 46, limit: 100, remaining: 54 },
+      },
+      {
+        id: 'step-10',
+        fromNode: 'dc-eu-ratelimit',
+        toNode: 'dc-eu-lb',
+        edgeId: 'e-dc-eu-lb-ratelimit',
+        reverse: true,
+        type: 'response',
+        title: 'Rate Limit Passed',
+        description: 'Rate Limiter разрешает запрос',
+        detailedInfo: `ЗАЧЕМ: Load Balancer должен знать результат проверки.
+
+ЧТО ПРОИСХОДИТ:
+1. Rate Limiter возвращает OK
+2. LB добавляет rate limit headers
+3. Запрос продолжает путь к API Gateway
+
+ПАТТЕРН: Load Balancer как Policy Enforcement Point.`,
+        duration: 160,
+        realLatency: 0.5,
+        payload: { status: 'allowed' },
+      },
+      {
+        id: 'step-11',
         fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-gw',
         edgeId: 'e-dc-eu-lb-gw',
@@ -160,7 +245,7 @@ Sticky Sessions не используются — stateless архитектур
 
       // ========== АВТОРИЗАЦИЯ ==========
       {
-        id: 'step-8',
+        id: 'step-12',
         fromNode: 'dc-eu-gw',
         toNode: 'dc-eu-auth',
         edgeId: 'e-dc-eu-gw-auth',
@@ -184,7 +269,7 @@ Sticky Sessions не используются — stateless архитектур
         payload: { token: 'eyJhbGciOiJSUzI1NiIs...', localChecks: ['signature', 'expiration', 'issuer'] },
       },
       {
-        id: 'step-9',
+        id: 'step-13',
         fromNode: 'dc-eu-auth',
         toNode: 'dc-eu-session',
         edgeId: 'e-dc-eu-auth-session',
@@ -205,7 +290,7 @@ Redis Set с TTL = max token lifetime (обычно 24h).`,
         payload: { operation: 'SISMEMBER', key: 'blacklist:tokens', jti: 'abc123-xyz789' },
       },
       {
-        id: 'step-10',
+        id: 'step-14',
         fromNode: 'dc-eu-session',
         toNode: 'dc-eu-auth',
         edgeId: 'e-dc-eu-auth-session',
@@ -226,7 +311,7 @@ Redis Set с TTL = max token lifetime (обычно 24h).`,
         payload: { inBlacklist: false, responseTime: '0.1ms' },
       },
       {
-        id: 'step-11',
+        id: 'step-15',
         fromNode: 'dc-eu-auth',
         toNode: 'dc-eu-gw',
         edgeId: 'e-dc-eu-gw-auth',
@@ -246,91 +331,6 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         duration: 240,
         realLatency: 1,
         payload: { userId: 'user_123', permissions: ['orders:create', 'orders:read'] },
-      },
-
-      // ========== RATE LIMITING ==========
-      {
-        id: 'step-12',
-        fromNode: 'dc-eu-lb',
-        toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-lb-ratelimit',
-        type: 'request',
-        title: 'Rate Limit Check',
-        description: 'Load Balancer проверяет лимиты запросов',
-        detailedInfo: `ЗАЧЕМ: Защита от перегрузки и DDoS, fair usage между пользователями.
-
-ЧТО ПРОИСХОДИТ:
-1. Rate Limiter получает запрос с X-User-Id
-2. Проверяет Redis: текущий счётчик для user_123
-3. Применяет Token Bucket алгоритм
-4. Лимиты: 100 req/min для обычных пользователей
-
-ПАТТЕРН: Distributed Rate Limiting — единый счётчик для всех инстансов балансировщика.`,
-        duration: 400,
-        realLatency: 1,
-        payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 45, limit: 100 },
-      },
-      {
-        id: 'step-13',
-        fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-cache',
-        edgeId: 'e-dc-eu-ratelimit-cache',
-        type: 'request',
-        title: 'Rate Limiter → Redis',
-        description: 'Проверка и инкремент счётчика в Redis',
-        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов балансировщика.
-
-ЧТО ПРОИСХОДИТ:
-1. INCR rate:user_123:orders (атомарный инкремент)
-2. EXPIRE устанавливает TTL=60 сек (sliding window)
-3. Если счётчик > limit → возврат 429 Too Many Requests
-
-ПАТТЕРН: Sliding Window Rate Limiting в Redis.`,
-        duration: 240,
-        realLatency: 0.5,
-        payload: { key: 'rate:user_123:orders', operation: 'INCR', ttl: 60 },
-      },
-      {
-        id: 'step-14',
-        fromNode: 'dc-eu-cache',
-        toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-ratelimit-cache',
-        reverse: true,
-        type: 'response',
-        title: 'Rate Limit OK',
-        description: 'Redis подтверждает что лимит не превышен',
-        detailedInfo: `ЗАЧЕМ: Разрешить или заблокировать запрос.
-
-ЧТО ПРОИСХОДИТ:
-1. Redis вернул текущее значение счётчика: 46
-2. 46 < 100 (лимит) → запрос разрешён
-3. Добавляются headers: X-RateLimit-Remaining: 54
-
-РЕЗУЛЬТАТ: Запрос прошёл rate limiting.`,
-        duration: 160,
-        realLatency: 0.1,
-        payload: { allowed: true, current: 46, limit: 100, remaining: 54 },
-      },
-      {
-        id: 'step-15',
-        fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-lb',
-        edgeId: 'e-dc-eu-lb-ratelimit',
-        reverse: true,
-        type: 'response',
-        title: 'Rate Limit Passed',
-        description: 'Rate Limiter разрешает запрос',
-        detailedInfo: `ЗАЧЕМ: Load Balancer должен знать результат проверки.
-
-ЧТО ПРОИСХОДИТ:
-1. Rate Limiter возвращает OK
-2. LB добавляет rate limit headers в response
-3. Запрос продолжает путь к API Gateway
-
-ПАТТЕРН: Load Balancer как Policy Enforcement Point.`,
-        duration: 160,
-        realLatency: 0.5,
-        payload: { status: 'allowed' },
       },
 
       // ========== K8S ROUTING ==========
@@ -1787,108 +1787,18 @@ HAProxy метрики:
         realLatency: 1,
         payload: { queueDepth: 500 },
       },
-      {
-        id: 'over-7',
-        fromNode: 'dc-eu-lb',
-        toNode: 'dc-eu-gw',
-        edgeId: 'e-dc-eu-lb-gw',
-        type: 'request',
-        title: 'Regional LB → API Gateway',
-        description: 'Запрос на API Gateway',
-        detailedInfo: `API Gateway — первая линия защиты от перегрузки.
-
-Здесь будет:
-1. Аутентификация (быстро, JWT локально)
-2. Rate Limiting (критически важно!)
-3. Роутинг в K8s`,
-        duration: 1000,
-        realLatency: 2,
-        payload: {},
-      },
-
-      // ========== AUTHENTICATION (быстро) ==========
-      {
-        id: 'over-8',
-        fromNode: 'dc-eu-gw',
-        toNode: 'dc-eu-auth',
-        edgeId: 'e-dc-eu-gw-auth',
-        type: 'request',
-        title: 'JWT Validation',
-        description: 'Проверка токена',
-        detailedInfo: `JWT проверяется ЛОКАЛЬНО — быстро даже под нагрузкой.
-
-ЧТО ПРОИСХОДИТ:
-1. Подпись проверяется публичным ключом (в памяти)
-2. Expiration проверяется
-3. НЕ ходим в Redis для каждого запроса!
-
-⚡ Время: ~1ms даже при 10x нагрузке`,
-        duration: 400,
-        realLatency: 1,
-        payload: { localValidation: true },
-      },
-      {
-        id: 'over-9',
-        fromNode: 'dc-eu-auth',
-        toNode: 'dc-eu-session',
-        edgeId: 'e-dc-eu-auth-session',
-        type: 'request',
-        title: 'Token Blacklist Check',
-        description: 'Проверка отзыва токена',
-        detailedInfo: `Redis под нагрузкой, но справляется.
-
-REDIS МЕТРИКИ:
-• Operations/sec: 100,000 (capacity: 500,000)
-• Memory: 60%
-• Latency p99: 2ms (обычно 0.5ms)
-
-Redis масштабируется горизонтально — ОК!`,
-        duration: 400,
-        realLatency: 2,
-        payload: { redisLoad: '20%' },
-      },
-      {
-        id: 'over-10',
-        fromNode: 'dc-eu-session',
-        toNode: 'dc-eu-auth',
-        edgeId: 'e-dc-eu-auth-session',
-        reverse: true,
-        type: 'response',
-        title: 'Token OK',
-        description: 'Токен валиден',
-        detailedInfo: `Токен не в blacklist — пользователь аутентифицирован.`,
-        duration: 200,
-        realLatency: 0.5,
-        payload: { inBlacklist: false },
-      },
-      {
-        id: 'over-11',
-        fromNode: 'dc-eu-auth',
-        toNode: 'dc-eu-gw',
-        edgeId: 'e-dc-eu-gw-auth',
-        reverse: true,
-        type: 'response',
-        title: 'Auth Complete',
-        description: 'Аутентификация пройдена',
-        detailedInfo: `Пользователь: user_456
-Permissions: orders:create
-
-Теперь RATE LIMITING — критический момент!`,
-        duration: 200,
-        realLatency: 1,
-        payload: { userId: 'user_456' },
-      },
-
       // ========== RATE LIMITING — ОТКАЗ ==========
       {
-        id: 'over-12',
+        id: 'over-7',
         fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-ratelimit',
         edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
         title: '⚠️ Rate Limit Check',
         description: 'Load Balancer проверяет лимиты запросов',
-        detailedInfo: `ЗАЧЕМ: Защитить backend от перегрузки.
+        detailedInfo: `ЗАЧЕМ: Защитить backend от перегрузки ДО того как запрос дойдёт до сервисов.
+
+Rate Limiting на балансере — первая линия защиты!
 
 ЛИМИТЫ ДЛЯ user_456:
 • POST /orders: 10 req/min (обычные пользователи)
@@ -1903,7 +1813,7 @@ Permissions: orders:create
         payload: { userId: 'user_456', endpoint: 'POST /orders', currentCount: 10, limit: 10 },
       },
       {
-        id: 'over-13',
+        id: 'over-8',
         fromNode: 'dc-eu-ratelimit',
         toNode: 'dc-eu-cache',
         edgeId: 'e-dc-eu-ratelimit-cache',
@@ -1925,7 +1835,7 @@ Permissions: orders:create
         payload: { key: 'rate:user_456:orders:minute', operation: 'INCR' },
       },
       {
-        id: 'over-14',
+        id: 'over-9',
         fromNode: 'dc-eu-cache',
         toNode: 'dc-eu-ratelimit',
         edgeId: 'e-dc-eu-ratelimit-cache',
@@ -1942,6 +1852,7 @@ Permissions: orders:create
 
 ЭТО ЗАЩИЩАЕТ:
 • Backend сервисы от перегрузки
+• API Gateway от лишней работы
 • Других пользователей от degradation
 • Базы данных от исчерпания connections`,
         duration: 200,
@@ -1949,7 +1860,7 @@ Permissions: orders:create
         payload: { exceeded: true, current: 11, limit: 10, retryAfter: 45 },
       },
       {
-        id: 'over-15',
+        id: 'over-10',
         fromNode: 'dc-eu-ratelimit',
         toNode: 'dc-eu-lb',
         edgeId: 'e-dc-eu-lb-ratelimit',
@@ -1973,7 +1884,10 @@ HEADERS:
 • Retry-After: 45
 
 ПАТТЕРН: Backpressure
-Система явно сообщает клиенту "подожди".`,
+Система явно сообщает клиенту "подожди".
+
+ВАЖНО: Запрос НЕ дошёл до API Gateway и Auth!
+Rate Limiting на LB экономит ресурсы всей системы.`,
         duration: 200,
         realLatency: 0.5,
         payload: { status: 429, retryAfter: 45 },
@@ -1981,15 +1895,20 @@ HEADERS:
 
       // ========== ERROR RESPONSE PATH ==========
       {
-        id: 'over-16',
-        fromNode: 'dc-eu-gw',
-        toNode: 'dc-eu-lb',
-        edgeId: 'e-dc-eu-lb-gw',
+        id: 'over-11',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu',
+        edgeId: 'e-dc-eu-lb',
         reverse: true,
         type: 'response',
-        title: 'Error → Regional LB',
+        title: 'Error → DC Exit',
         description: '429 идёт обратно',
-        detailedInfo: `API Gateway формирует error response.
+        detailedInfo: `LB формирует error response напрямую.
+
+ВАЖНО: Запрос был отклонён на уровне LB!
+• Не нагрузили API Gateway
+• Не нагрузили Auth Service
+• Не нагрузили K8s сервисы
 
 МЕТРИКИ ОБНОВЛЕНЫ:
 • rate_limited_requests_total{user="user_456"} ++
@@ -1999,23 +1918,7 @@ HEADERS:
         payload: { statusCode: 429 },
       },
       {
-        id: 'over-17',
-        fromNode: 'dc-eu-lb',
-        toNode: 'dc-eu',
-        edgeId: 'e-dc-eu-lb',
-        reverse: true,
-        type: 'response',
-        title: 'LB → DC Border',
-        description: 'Error выходит из LB',
-        detailedInfo: `HAProxy записывает 429 в access log.
-
-Метрика: http_responses_total{status="429"} растёт.`,
-        duration: 200,
-        realLatency: 0.5,
-        payload: {},
-      },
-      {
-        id: 'over-18',
+        id: 'over-12',
         fromNode: 'dc-eu',
         toNode: 'global-lb',
         edgeId: 'e-global-lb-dc-eu',
@@ -2033,7 +1936,7 @@ HEADERS:
         payload: { healthImpact: 'none' },
       },
       {
-        id: 'over-19',
+        id: 'over-13',
         fromNode: 'global-lb',
         toNode: 'cdn',
         edgeId: 'e-cdn-global-lb',
@@ -2049,7 +1952,7 @@ HEADERS:
         payload: { cached: false },
       },
       {
-        id: 'over-20',
+        id: 'over-14',
         fromNode: 'cdn',
         toNode: 'client',
         edgeId: 'e-client-cdn',
@@ -2084,7 +1987,7 @@ X-RateLimit-Remaining: 0
 
       // ========== ВТОРОЙ ЗАПРОС: CIRCUIT BREAKER ==========
       {
-        id: 'over-21',
+        id: 'over-15',
         fromNode: 'client',
         toNode: 'cdn',
         edgeId: 'e-client-cdn',
@@ -2104,7 +2007,7 @@ X-RateLimit-Remaining: 0
         payload: { userId: 'user_789', tier: 'premium', rateLimit: 'OK' },
       },
       {
-        id: 'over-22',
+        id: 'over-16',
         fromNode: 'cdn',
         toNode: 'global-lb',
         edgeId: 'e-cdn-global-lb',
@@ -2117,7 +2020,7 @@ X-RateLimit-Remaining: 0
         payload: {},
       },
       {
-        id: 'over-23',
+        id: 'over-17',
         fromNode: 'global-lb',
         toNode: 'dc-eu',
         edgeId: 'e-global-lb-dc-eu',
@@ -2130,7 +2033,7 @@ X-RateLimit-Remaining: 0
         payload: {},
       },
       {
-        id: 'over-24',
+        id: 'over-18',
         fromNode: 'dc-eu',
         toNode: 'dc-eu-lb',
         edgeId: 'e-dc-eu-lb',
@@ -2143,20 +2046,7 @@ X-RateLimit-Remaining: 0
         payload: {},
       },
       {
-        id: 'over-25',
-        fromNode: 'dc-eu-lb',
-        toNode: 'dc-eu-gw',
-        edgeId: 'e-dc-eu-lb-gw',
-        type: 'request',
-        title: 'LB → API Gateway',
-        description: 'На API Gateway',
-        detailedInfo: `API Gateway обработает auth и rate limit.`,
-        duration: 1000,
-        realLatency: 2,
-        payload: {},
-      },
-      {
-        id: 'over-26',
+        id: 'over-19',
         fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-ratelimit',
         edgeId: 'e-dc-eu-lb-ratelimit',
@@ -2171,7 +2061,7 @@ X-RateLimit-Remaining: 0
         payload: { userId: 'user_789', current: 6, limit: 100 },
       },
       {
-        id: 'over-27',
+        id: 'over-20',
         fromNode: 'dc-eu-ratelimit',
         toNode: 'dc-eu-lb',
         edgeId: 'e-dc-eu-lb-ratelimit',
@@ -2187,7 +2077,20 @@ X-RateLimit-Remaining: 0
         payload: { allowed: true, remaining: 94 },
       },
       {
-        id: 'over-28',
+        id: 'over-21',
+        fromNode: 'dc-eu-lb',
+        toNode: 'dc-eu-gw',
+        edgeId: 'e-dc-eu-lb-gw',
+        type: 'request',
+        title: 'LB → API Gateway',
+        description: 'На API Gateway',
+        detailedInfo: `После прохождения rate limit запрос идёт на API Gateway.`,
+        duration: 1000,
+        realLatency: 2,
+        payload: {},
+      },
+      {
+        id: 'over-22',
         fromNode: 'dc-eu-gw',
         toNode: 'dc-eu-ingress',
         edgeId: 'e-dc-eu-gw-ingress',
@@ -2205,7 +2108,7 @@ K8s тоже под нагрузкой:
         payload: { clusterLoad: 'high' },
       },
       {
-        id: 'over-29',
+        id: 'over-23',
         fromNode: 'dc-eu-ingress',
         toNode: 'dc-eu-order-svc',
         edgeId: 'e-dc-eu-ingress-order-svc',
@@ -2223,7 +2126,7 @@ ORDER SERVICE СТАТУС:
         payload: { replicas: 10, ready: 7, errorRate: '45%' },
       },
       {
-        id: 'over-30',
+        id: 'over-24',
         fromNode: 'dc-eu-order-svc',
         toNode: 'dc-eu-order-pod',
         edgeId: 'e-dc-eu-order-svc-pod',
@@ -2250,7 +2153,7 @@ CIRCUIT BREAKER КОНФИГУРАЦИЯ:
         payload: { circuitState: 'OPEN', errorRate: '52%', threshold: '50%' },
       },
       {
-        id: 'over-31',
+        id: 'over-25',
         fromNode: 'dc-eu-order-pod',
         toNode: 'dc-eu-istiod',
         edgeId: 'e-dc-eu-istiod-order',
@@ -2275,7 +2178,7 @@ CIRCUIT BREAKER КОНФИГУРАЦИЯ:
         payload: { circuitState: 'OPEN', action: 'REJECT', reason: 'circuit_open' },
       },
       {
-        id: 'over-32',
+        id: 'over-26',
         fromNode: 'dc-eu-istiod',
         toNode: 'dc-eu-order-pod',
         edgeId: 'e-dc-eu-istiod-order',
@@ -2301,7 +2204,7 @@ Circuit Breaker в состоянии OPEN.
         payload: { circuitState: 'OPEN', nextRetry: '15s' },
       },
       {
-        id: 'over-33',
+        id: 'over-27',
         fromNode: 'dc-eu-order-pod',
         toNode: 'dc-eu-order-svc',
         edgeId: 'e-dc-eu-order-svc-pod',
@@ -2329,7 +2232,7 @@ x-circuit-state: open
 
       // ========== OBSERVABILITY ==========
       {
-        id: 'over-34',
+        id: 'over-28',
         fromNode: 'dc-eu-order-pod',
         toNode: 'dc-eu-prometheus',
         edgeId: 'e-dc-eu-pods-prometheus',
@@ -2354,7 +2257,7 @@ PagerDuty уведомил on-call инженера.`,
         payload: { circuitBreakerOpen: true, alerts: ['CircuitBreakerOpen', 'HighErrorRate'] },
       },
       {
-        id: 'over-35',
+        id: 'over-29',
         fromNode: 'dc-eu-order-pod',
         toNode: 'dc-eu-jaeger',
         edgeId: 'e-dc-eu-pods-jaeger',
@@ -2385,7 +2288,7 @@ PagerDuty уведомил on-call инженера.`,
 
       // ========== ERROR RESPONSE PATH ==========
       {
-        id: 'over-36',
+        id: 'over-30',
         fromNode: 'dc-eu-order-svc',
         toNode: 'dc-eu-ingress',
         edgeId: 'e-dc-eu-ingress-order-svc',
@@ -2399,7 +2302,7 @@ PagerDuty уведомил on-call инженера.`,
         payload: { statusCode: 503 },
       },
       {
-        id: 'over-37',
+        id: 'over-31',
         fromNode: 'dc-eu-ingress',
         toNode: 'dc-eu-gw',
         edgeId: 'e-dc-eu-gw-ingress',
@@ -2417,7 +2320,7 @@ PagerDuty уведомил on-call инженера.`,
         payload: {},
       },
       {
-        id: 'over-38',
+        id: 'over-32',
         fromNode: 'dc-eu-gw',
         toNode: 'dc-eu-lb',
         edgeId: 'e-dc-eu-lb-gw',
@@ -2431,7 +2334,7 @@ PagerDuty уведомил on-call инженера.`,
         payload: {},
       },
       {
-        id: 'over-39',
+        id: 'over-33',
         fromNode: 'dc-eu-lb',
         toNode: 'dc-eu',
         edgeId: 'e-dc-eu-lb',
@@ -2445,7 +2348,7 @@ PagerDuty уведомил on-call инженера.`,
         payload: {},
       },
       {
-        id: 'over-40',
+        id: 'over-34',
         fromNode: 'dc-eu',
         toNode: 'global-lb',
         edgeId: 'e-global-lb-dc-eu',
@@ -2462,7 +2365,7 @@ GLB может начать отводить трафик на другие ДЦ
         payload: { dcHealth: 'degraded' },
       },
       {
-        id: 'over-41',
+        id: 'over-35',
         fromNode: 'global-lb',
         toNode: 'cdn',
         edgeId: 'e-cdn-global-lb',
@@ -2476,7 +2379,7 @@ GLB может начать отводить трафик на другие ДЦ
         payload: {},
       },
       {
-        id: 'over-42',
+        id: 'over-36',
         fromNode: 'cdn',
         toNode: 'client',
         edgeId: 'e-client-cdn',
