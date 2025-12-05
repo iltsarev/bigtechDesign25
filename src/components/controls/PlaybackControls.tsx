@@ -40,6 +40,7 @@ export default function PlaybackControls() {
     stop,
     stepForward,
     stepBackward,
+    setStep,
     setSpeed,
     setActiveEdge,
     setActiveNodes,
@@ -115,7 +116,7 @@ export default function PlaybackControls() {
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [playbackState, currentStepIndex, speed, totalSteps])
+  }, [playbackState, currentStepIndex, speed, totalSteps, getCurrentStep, setActiveEdge, setActiveNodes, setCurrentStepInfo, setParticleProgress, updateNodeStats, markStepCompleted, stepForward, stop])
 
   // Clear active state when stopped
   useEffect(() => {
@@ -125,13 +126,14 @@ export default function PlaybackControls() {
       setParticleProgress(0)
       setCurrentStepInfo(null, null, null)
     }
-  }, [playbackState])
+  }, [playbackState, setActiveEdge, setActiveNodes, setParticleProgress, setCurrentStepInfo])
 
   const handleStepForward = () => {
     if (currentStepIndex < totalSteps - 1) {
-      stepForward()
-      const step = getCurrentStep(currentStepIndex + 1)
+      const nextIndex = currentStepIndex + 1
+      const step = getCurrentStep(nextIndex)
       if (step) {
+        stepForward()
         setActiveEdge(`e-${step.fromNode}-${step.toNode}`)
         setActiveNodes([step.fromNode, step.toNode])
         const protocol = extractProtocol(step)
@@ -142,9 +144,35 @@ export default function PlaybackControls() {
 
   const handleStepBackward = () => {
     if (currentStepIndex > 0) {
-      stepBackward()
-      const step = getCurrentStep(currentStepIndex - 1)
+      const prevIndex = currentStepIndex - 1
+      const step = getCurrentStep(prevIndex)
       if (step) {
+        stepBackward()
+        setActiveEdge(`e-${step.fromNode}-${step.toNode}`)
+        setActiveNodes([step.fromNode, step.toNode])
+        const protocol = extractProtocol(step)
+        setCurrentStepInfo(step.type, protocol, step.realLatency)
+      }
+    }
+  }
+
+  const handleJumpToStart = () => {
+    const step = getCurrentStep(0)
+    if (step) {
+      setStep(0)
+      setActiveEdge(`e-${step.fromNode}-${step.toNode}`)
+      setActiveNodes([step.fromNode, step.toNode])
+      const protocol = extractProtocol(step)
+      setCurrentStepInfo(step.type, protocol, step.realLatency)
+    }
+  }
+
+  const handleJumpToEnd = () => {
+    const lastIndex = totalSteps - 1
+    if (lastIndex >= 0) {
+      const step = getCurrentStep(lastIndex)
+      if (step) {
+        setStep(lastIndex)
         setActiveEdge(`e-${step.fromNode}-${step.toNode}`)
         setActiveNodes([step.fromNode, step.toNode])
         const protocol = extractProtocol(step)
@@ -185,16 +213,16 @@ export default function PlaybackControls() {
         </button>
 
         <button
-          onClick={handleStepBackward}
+          onClick={handleJumpToStart}
           disabled={currentStepIndex === 0}
           className="p-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-30"
-          title="Previous Step"
+          title="Jump to Start"
         >
           <SkipBack size={20} className="text-gray-600" />
         </button>
 
         <button
-          onClick={stepBackward}
+          onClick={handleStepBackward}
           disabled={currentStepIndex === 0}
           className="p-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-30"
           title="Step Back"
@@ -230,10 +258,10 @@ export default function PlaybackControls() {
         </button>
 
         <button
-          onClick={handleStepForward}
+          onClick={handleJumpToEnd}
           disabled={currentStepIndex >= totalSteps - 1}
           className="p-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-30"
-          title="Next Step"
+          title="Jump to End"
         >
           <SkipForward size={20} className="text-gray-600" />
         </button>

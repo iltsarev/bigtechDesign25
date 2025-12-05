@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useRef } from 'react'
 import { EdgeProps, getBezierPath, EdgeLabelRenderer } from 'reactflow'
 import { useAnimationStore } from '../../../stores/animationStore'
 import { StepType } from '../../../types'
@@ -54,6 +54,7 @@ const AnimatedEdge = memo(({
   style = {},
   markerEnd,
 }: EdgeProps) => {
+  const pathRef = useRef<SVGPathElement>(null)
   const activeEdgeId = useAnimationStore((s) => s.activeEdgeId)
   const particleProgress = useAnimationStore((s) => s.particleProgress)
   const currentStepType = useAnimationStore((s) => s.currentStepType)
@@ -75,34 +76,41 @@ const AnimatedEdge = memo(({
 
   // Вычисляем позиции для trail эффекта (5 точек с затуханием)
   const trailPositions = useMemo(() => {
-    if (!isActive || particleProgress <= 0) return []
+    if (!isActive || particleProgress <= 0 || !pathRef.current) return []
 
     const positions = []
     const trailLength = 5
     const trailSpacing = 0.06
+    const pathLength = pathRef.current.getTotalLength()
 
     for (let i = 0; i < trailLength; i++) {
       const progress = particleProgress - (i * trailSpacing)
       if (progress > 0 && progress < 1) {
+        const point = pathRef.current.getPointAtLength(progress * pathLength)
         positions.push({
-          x: sourceX + (targetX - sourceX) * progress,
-          y: sourceY + (targetY - sourceY) * progress,
+          x: point.x,
+          y: point.y,
           opacity: 1 - (i * 0.2),
           scale: 1 - (i * 0.15),
         })
       }
     }
     return positions
-  }, [isActive, particleProgress, sourceX, sourceY, targetX, targetY])
+  }, [isActive, particleProgress])
 
-  // Основная позиция частицы
-  const particleX = sourceX + (targetX - sourceX) * particleProgress
-  const particleY = sourceY + (targetY - sourceY) * particleProgress
+  // Основная позиция частицы на кривой Безье
+  const particlePosition = useMemo(() => {
+    if (!pathRef.current || particleProgress <= 0 || particleProgress >= 1) return null
+    const pathLength = pathRef.current.getTotalLength()
+    const point = pathRef.current.getPointAtLength(particleProgress * pathLength)
+    return { x: point.x, y: point.y }
+  }, [particleProgress])
 
   return (
     <>
       {/* Background edge - цвет по латентности когда активно */}
       <path
+        ref={pathRef}
         id={id}
         className="react-flow__edge-path"
         d={edgePath}
@@ -155,12 +163,12 @@ const AnimatedEdge = memo(({
       ))}
 
       {/* Main Particle (flying request) */}
-      {isActive && particleProgress > 0 && particleProgress < 1 && (
+      {isActive && particlePosition && (
         <EdgeLabelRenderer>
           <div
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${particleX}px, ${particleY}px)`,
+              transform: `translate(-50%, -50%) translate(${particlePosition.x}px, ${particlePosition.y}px)`,
               pointerEvents: 'none',
             }}
             className="request-particle"

@@ -6,7 +6,6 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   useReactFlow,
-  ReactFlowProvider,
   Node,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
@@ -113,11 +112,7 @@ function FlowCanvasInner() {
   )
 }
 
-// Wrapper с ReactFlowProvider для доступа к useReactFlow
+// ReactFlowProvider уже есть в App.tsx
 export default function FlowCanvas() {
-  return (
-    <ReactFlowProvider>
-      <FlowCanvasInner />
-    </ReactFlowProvider>
-  )
+  return <FlowCanvasInner />
 }

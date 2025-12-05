@@ -103,7 +103,7 @@ export default function MainLayout() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentStepIndex, totalSteps, playbackState])
+  }, [currentStepIndex, totalSteps, playbackState, play, pause, stepForward, stepBackward, setStep, setActiveEdge, setActiveNodes, setCurrentStepInfo, getCurrentStep])
 
   return (
     <div className="h-screen flex flex-col bg-gray-100">
