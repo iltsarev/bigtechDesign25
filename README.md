@@ -23,7 +23,7 @@
 - CDN как edge proxy и WAF
 - Global и Regional Load Balancing
 - JWT авторизация с blacklist в distributed cache
-- Rate Limiting (Token Bucket)
+- Security Layer (WAF + Rate Limiting)
 - Service Mesh с sidecar proxies
 - SAGA паттерн через Event Bus
 - Репликация между датацентрами
@@ -41,7 +41,7 @@
 
 [Подробное описание →](docs/scenarios/dc-failover.md)
 
-### 3. Service Overload (Rate Limit + Circuit Breaker)
+### 3. Service Overload (Security Layer + Circuit Breaker)
 Чёрная пятница: защита системы от перегрузки при 10x трафике.
 
 **Что показывает:**
@@ -96,7 +96,7 @@ npm run build
 Клиент → DNS → CDN → Global LB → Data Centers (EU, US, Asia)
 
 ### Datacenter Level
-Regional LB → Rate Limiter → API Gateway → Auth → Compute Cluster
+Regional LB → Security Layer → API Gateway → Auth → Compute Cluster
 
 ### Cluster Level
 Ingress → Services → Pods → Sidecars → Cache/DB/Event Bus

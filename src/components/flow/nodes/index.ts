@@ -6,7 +6,7 @@ import { GlobalLbNode, RegionalLbNode } from './LoadBalancerNode'
 import { DataCenterNode } from './DataCenterNode'
 import { ApiGatewayNode } from './ApiGatewayNode'
 import { AuthServiceNode } from './AuthServiceNode'
-import { RateLimiterNode } from './RateLimiterNode'
+import { SecurityLayerNode } from './SecurityLayerNode'
 import { ContainerOrchestrationNode } from './ContainerOrchestrationNode'
 import { ServiceNode, IngressNode } from './ServiceNode'
 import { PodNode } from './PodNode'
@@ -24,7 +24,7 @@ export const nodeTypes: NodeTypes = {
   datacenter: DataCenterNode,
   apiGateway: ApiGatewayNode,
   authService: AuthServiceNode,
-  rateLimiter: RateLimiterNode,
+  securityLayer: SecurityLayerNode,
   containerOrchestration: ContainerOrchestrationNode,
   service: ServiceNode,
   ingress: IngressNode,

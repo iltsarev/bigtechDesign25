@@ -300,15 +300,15 @@ export const allNodes: ArchNode[] = [
       viewLevel: 'cluster',
     },
   },
-  // EU Rate Limiter
+  // EU Security Layer (WAF + Rate Limiter)
   {
     id: 'dc-eu-ratelimit',
-    type: 'rateLimiter',
+    type: 'securityLayer',
     position: { x: 1250, y: 180 },
     data: {
-      label: 'Rate Limiter',
-      description: 'Distributed Rate Limiting — защита от перегрузки',
-      technology: 'Token Bucket / Sliding Window',
+      label: 'Security Layer',
+      description: 'WAF + Rate Limiting — защита от атак и перегрузки',
+      technology: 'WAF + Token Bucket',
       viewLevel: 'datacenter',
     },
   },

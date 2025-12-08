@@ -122,18 +122,20 @@ export const nodeDescriptions: Record<NodeType, NodeDescription> = {
     technologies: ['OAuth2', 'OpenID Connect', 'JWT', 'Keycloak', 'Auth0'],
   },
 
-  rateLimiter: {
-    title: 'Rate Limiter',
-    purpose: 'Ограничение количества запросов от клиентов',
+  securityLayer: {
+    title: 'Security Layer (WAF + Rate Limiter)',
+    purpose: 'Защита от атак и ограничение количества запросов',
     keyFeatures: [
-      'Token bucket / Sliding window алгоритмы',
-      'Per-user и per-IP лимиты',
-      'Distributed rate limiting',
-      'Graceful degradation',
+      'WAF — фильтрация SQL injection, XSS, OWASP Top 10',
+      'Rate Limiting — Token bucket / Sliding window',
+      'Per-user, per-IP и per-endpoint лимиты',
+      'Geo-blocking и IP reputation',
+      'Bot detection и CAPTCHA интеграция',
+      'DDoS mitigation',
     ],
-    whyNeeded: 'Защищает систему от abuse и DDoS. Обеспечивает fair usage — один клиент не может забрать все ресурсы.',
-    realWorldExample: 'Twitter API: 300 requests/15 min для timeline, GitHub API: 5000 req/hour. Все BigTech имеют свои решения',
-    technologies: ['Custom solutions', 'Envoy rate limiting', 'Kong plugin', 'Redis + Lua'],
+    whyNeeded: 'Централизованный слой безопасности защищает от вредоносных запросов (WAF) и перегрузки (Rate Limiting). Объединение позволяет принимать решения на основе обоих факторов — подозрительный трафик получает более жёсткие лимиты.',
+    realWorldExample: 'Cloudflare WAF + Rate Limiting, AWS WAF + Shield, Google Cloud Armor. BigTech компании используют собственные решения с ML для детекции аномалий',
+    technologies: ['Custom solutions (Google, Meta)', 'Cloudflare', 'AWS WAF', 'ModSecurity', 'Envoy + Lua'],
   },
 
   containerOrchestration: {

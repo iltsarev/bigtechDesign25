@@ -9,7 +9,7 @@ export type NodeType =
   | 'regionalLb'
   | 'apiGateway'
   | 'authService'
-  | 'rateLimiter'
+  | 'securityLayer'
   | 'containerOrchestration'
   | 'ingress'
   | 'service'

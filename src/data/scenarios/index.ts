@@ -143,17 +143,17 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         toNode: 'dc-eu-ratelimit',
         edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
-        title: 'Rate Limit Check',
-        description: 'Load Balancer проверяет лимиты запросов',
-        detailedInfo: `ЗАЧЕМ: Защита от перегрузки и DDoS, fair usage между пользователями.
+        title: 'Security Check (WAF + Rate Limit)',
+        description: 'Security Layer проверяет безопасность и лимиты',
+        detailedInfo: `ЗАЧЕМ: Защита от атак (WAF) и перегрузки (Rate Limiting).
 
 ЧТО ПРОИСХОДИТ:
-1. Rate Limiter получает запрос
-2. Проверяет Cache: текущий счётчик по IP/User
-3. Применяет Token Bucket алгоритм
-4. Лимиты: 100 req/min для обычных пользователей
+1. WAF проверяет запрос на SQL injection, XSS, OWASP Top 10
+2. Проверяется IP reputation и geo-blocking
+3. Rate Limiter проверяет Cache: текущий счётчик по IP/User
+4. Применяет Token Bucket алгоритм (100 req/min)
 
-ПАТТЕРН: Distributed Rate Limiting — единый счётчик для всех инстансов балансировщика.`,
+ПАТТЕРН: Security Layer = WAF + Rate Limiting в одном компоненте.`,
         duration: 400,
         realLatency: 1,
         payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 45, limit: 100 },
@@ -164,9 +164,9 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         toNode: 'dc-eu-cache',
         edgeId: 'e-dc-eu-ratelimit-cache',
         type: 'request',
-        title: 'Rate Limiter → Cache',
-        description: 'Проверка и инкремент счётчика в Distributed Cache',
-        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов балансировщика.
+        title: 'Security Layer → Cache',
+        description: 'Проверка счётчика rate limit в Distributed Cache',
+        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов Security Layer.
 
 ЧТО ПРОИСХОДИТ:
 1. INCR rate:user_123:orders (атомарный инкремент)
@@ -206,16 +206,16 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         edgeId: 'e-dc-eu-lb-ratelimit',
         reverse: true,
         type: 'response',
-        title: 'Rate Limit Passed',
-        description: 'Rate Limiter разрешает запрос',
+        title: 'Security Check Passed',
+        description: 'Security Layer разрешает запрос',
         detailedInfo: `ЗАЧЕМ: Load Balancer должен знать результат проверки.
 
 ЧТО ПРОИСХОДИТ:
-1. Rate Limiter возвращает OK
-2. LB добавляет rate limit headers
+1. WAF проверки пройдены (no threats detected)
+2. Rate limit не превышен → Security Layer возвращает OK
 3. Запрос продолжает путь к API Gateway
 
-ПАТТЕРН: Load Balancer как Policy Enforcement Point.`,
+ПАТТЕРН: Security Layer как Policy Enforcement Point.`,
         duration: 160,
         realLatency: 0.5,
         payload: { status: 'allowed' },
@@ -1054,7 +1054,7 @@ SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
 РЕЗУЛЬТАТ: Полный цикл ~2-3 секунды.
 
 ИТОГО ПАТТЕРНЫ В ЗАПРОСЕ:
-• API Gateway • JWT Auth • Rate Limiting
+• API Gateway • JWT Auth • Security Layer (WAF + Rate Limiting)
 • SAGA • Event Sourcing • Cache-Aside
 • Service Mesh • Multi-DC Architecture`,
         duration: 800,
@@ -1671,8 +1671,8 @@ US DC вернул бы 307 Redirect на EU DC
   // ==================== SCENARIO 3: SERVICE OVERLOAD ====================
   {
     id: 'service-overload',
-    name: 'Service Overload (Rate Limit + Circuit Breaker)',
-    description: 'Чёрная пятница: Rate Limiter отсекает избыточный трафик, Circuit Breaker защищает сервисы',
+    name: 'Service Overload (Security Layer + Circuit Breaker)',
+    description: 'Чёрная пятница: Security Layer отсекает избыточный трафик, Circuit Breaker защищает сервисы',
     initialViewLevel: 'global',
     steps: [
       // ========== ПУТЬ ДО API GATEWAY ==========
@@ -1787,18 +1787,18 @@ HAProxy метрики:
         realLatency: 1,
         payload: { queueDepth: 500 },
       },
-      // ========== RATE LIMITING — ОТКАЗ ==========
+      // ========== SECURITY LAYER — ОТКАЗ ==========
       {
         id: 'over-7',
         fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-ratelimit',
         edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
-        title: '⚠️ Rate Limit Check',
-        description: 'Load Balancer проверяет лимиты запросов',
-        detailedInfo: `ЗАЧЕМ: Защитить backend от перегрузки ДО того как запрос дойдёт до сервисов.
+        title: '⚠️ Security Check',
+        description: 'Security Layer проверяет безопасность и лимиты',
+        detailedInfo: `ЗАЧЕМ: Защитить backend от атак и перегрузки ДО того как запрос дойдёт до сервисов.
 
-Rate Limiting на балансере — первая линия защиты!
+Security Layer (WAF + Rate Limiting) — первая линия защиты!
 
 ЛИМИТЫ ДЛЯ user_456:
 • POST /orders: 10 req/min (обычные пользователи)
@@ -1867,8 +1867,8 @@ Rate Limiting на балансере — первая линия защиты!
         reverse: true,
         type: 'response',
         title: '❌ 429 Too Many Requests',
-        description: 'Rate Limiter отклоняет запрос',
-        detailedInfo: `ОТВЕТ RATE LIMITER:
+        description: 'Security Layer отклоняет запрос',
+        detailedInfo: `ОТВЕТ SECURITY LAYER:
 {
   "error": "rate_limit_exceeded",
   "limit": 10,
@@ -1887,7 +1887,7 @@ HEADERS:
 Система явно сообщает клиенту "подожди".
 
 ВАЖНО: Запрос НЕ дошёл до API Gateway и Auth!
-Rate Limiting на LB экономит ресурсы всей системы.`,
+Security Layer экономит ресурсы всей системы.`,
         duration: 200,
         realLatency: 0.5,
         payload: { status: 429, retryAfter: 45 },
@@ -2051,11 +2051,11 @@ X-RateLimit-Remaining: 0
         toNode: 'dc-eu-ratelimit',
         edgeId: 'e-dc-eu-lb-ratelimit',
         type: 'request',
-        title: 'Rate Limit Check',
-        description: 'Load Balancer проверяет лимиты',
+        title: 'Security Check',
+        description: 'Security Layer проверяет лимиты',
         detailedInfo: `Premium user: лимит 100 req/min
 Текущий count: 6
-Результат: OK ✓`,
+WAF: OK ✓ Rate Limit: OK ✓`,
         duration: 400,
         realLatency: 1,
         payload: { userId: 'user_789', current: 6, limit: 100 },
@@ -2067,9 +2067,9 @@ X-RateLimit-Remaining: 0
         edgeId: 'e-dc-eu-lb-ratelimit',
         reverse: true,
         type: 'response',
-        title: '✅ Rate Limit OK',
-        description: 'Лимит не превышен',
-        detailedInfo: `Premium пользователь проходит rate limit.
+        title: '✅ Security Check OK',
+        description: 'Проверки безопасности пройдены',
+        detailedInfo: `Premium пользователь проходит Security Layer.
 
 Но впереди ещё Circuit Breaker...`,
         duration: 200,
@@ -2084,7 +2084,7 @@ X-RateLimit-Remaining: 0
         type: 'request',
         title: 'LB → API Gateway',
         description: 'На API Gateway',
-        detailedInfo: `После прохождения rate limit запрос идёт на API Gateway.`,
+        detailedInfo: `После прохождения Security Layer запрос идёт на API Gateway.`,
         duration: 1000,
         realLatency: 2,
         payload: {},
@@ -2413,7 +2413,7 @@ x-proxy-overloaded: true
 • Пользователь уже ушёл
 
 📊 ИТОГИ СЦЕНАРИЯ:
-1. Rate Limiter защитил от abuse (429)
+1. Security Layer защитил от abuse (429)
 2. Circuit Breaker защитил от cascade failure (503)
 3. Observability: метрики, трейсы, алерты
 4. Быстрые ответы: 50-80ms вместо 30s timeout`,
