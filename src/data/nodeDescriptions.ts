@@ -153,17 +153,17 @@ export const nodeDescriptions: Record<NodeType, NodeDescription> = {
   },
 
   ingress: {
-    title: 'Ingress Controller',
-    purpose: 'HTTP routing внутри кластера оркестрации',
+    title: 'Internal L7 Router',
+    purpose: 'HTTP маршрутизация к сервисам внутри кластера',
     keyFeatures: [
       'Path-based и host-based routing',
       'TLS termination',
       'Load balancing к сервисам',
-      'Canary deployments',
+      'Canary deployments и traffic splitting',
     ],
-    whyNeeded: 'Единая точка входа в кластер. Маршрутизирует внешний трафик к нужным сервисам по правилам.',
-    realWorldExample: 'Google использует GFE (Google Front End), как OSS — Nginx Ingress направляет api.example.com/v1/* на v1 сервис',
-    technologies: ['GFE (Google)', 'Nginx Ingress', 'Traefik', 'Envoy', 'HAProxy'],
+    whyNeeded: 'Единая точка входа в кластер. Маршрутизирует трафик от API Gateway к нужным микросервисам по URL path и headers.',
+    realWorldExample: 'Google использует GFE (Google Front End), Meta — свои L7 роутеры. OSS: Envoy, NGINX, Traefik',
+    technologies: ['GFE (Google)', 'Custom (Meta)', 'Envoy', 'NGINX', 'Traefik'],
   },
 
   serviceGroup: {

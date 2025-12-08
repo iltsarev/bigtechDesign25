@@ -93,19 +93,8 @@ export const allNodes: ArchNode[] = [
     position: { x: 1500, y: -100 },
     data: {
       label: 'Auth Service',
-      description: 'Identity Provider — аутентификация и авторизация',
+      description: 'Identity Provider — auth + token blacklist (in-memory TTL)',
       technology: 'OAuth 2.0 / JWT',
-      viewLevel: 'datacenter',
-    },
-  },
-  {
-    id: 'dc-eu-session',
-    type: 'cache',
-    position: { x: 1750, y: -100 },
-    data: {
-      label: 'Token Blacklist',
-      description: 'JWT Blacklist — отозванные токены (logout/revoke)',
-      technology: 'In-memory store + TTL',
       viewLevel: 'datacenter',
     },
   },
@@ -114,9 +103,9 @@ export const allNodes: ArchNode[] = [
     type: 'ingress',
     position: { x: 1750, y: 50 },
     data: {
-      label: 'Ingress Controller',
-      description: 'Ingress Controller — L7 роутинг в кластер оркестрации',
-      technology: 'NGINX',
+      label: 'Internal Router',
+      description: 'L7 Router — маршрутизация к сервисам внутри кластера',
+      technology: 'e.g. Envoy, NGINX',
       viewLevel: 'cluster',
     },
   },
@@ -130,14 +119,14 @@ export const allNodes: ArchNode[] = [
       description: 'Microservice — бизнес-логика пользователей',
       technology: 'Go / gRPC',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-eu-user-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-eu-user-svc',
     extent: 'parent',
     data: {
@@ -151,7 +140,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-user-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-eu-user-svc',
     extent: 'parent',
     data: {
@@ -165,20 +154,20 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-order-svc',
     type: 'serviceGroup',
-    position: { x: 2020, y: -20 },
+    position: { x: 2020, y: 20 },
     data: {
       label: 'Order Service',
       description: 'Microservice — SAGA orchestrator',
       technology: 'Java / Spring',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-eu-order-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-eu-order-svc',
     extent: 'parent',
     data: {
@@ -192,7 +181,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-order-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-eu-order-svc',
     extent: 'parent',
     data: {
@@ -206,20 +195,20 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-payment-svc',
     type: 'serviceGroup',
-    position: { x: 2020, y: 100 },
+    position: { x: 2020, y: 180 },
     data: {
       label: 'Payment Service',
       description: 'Microservice — платежи',
       technology: 'Node.js',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-eu-payment-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-eu-payment-svc',
     extent: 'parent',
     data: {
@@ -233,7 +222,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-payment-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-eu-payment-svc',
     extent: 'parent',
     data: {
@@ -247,20 +236,20 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-inventory-svc',
     type: 'serviceGroup',
-    position: { x: 2020, y: 220 },
+    position: { x: 2020, y: 340 },
     data: {
       label: 'Inventory Service',
       description: 'Microservice — склад',
       technology: 'Python / FastAPI',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-eu-inventory-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-eu-inventory-svc',
     extent: 'parent',
     data: {
@@ -274,7 +263,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-inventory-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-eu-inventory-svc',
     extent: 'parent',
     data: {
@@ -300,7 +289,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-order-db',
     type: 'database',
-    position: { x: 2300, y: 0 },
+    position: { x: 2300, y: 40 },
     data: {
       label: 'Order DB',
       description: 'Database per Service — изолированная БД',
@@ -311,7 +300,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-payment-db',
     type: 'database',
-    position: { x: 2300, y: 120 },
+    position: { x: 2300, y: 200 },
     data: {
       label: 'Payment DB',
       description: 'Database per Service — изолированная БД',
@@ -322,7 +311,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-inventory-db',
     type: 'database',
-    position: { x: 2300, y: 240 },
+    position: { x: 2300, y: 360 },
     data: {
       label: 'Inventory DB',
       description: 'Database per Service — изолированная БД',
@@ -334,7 +323,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-cache',
     type: 'cache',
-    position: { x: 2550, y: 440 },
+    position: { x: 2550, y: 500 },
     data: {
       label: 'Distributed Cache',
       description: 'Distributed Cache — кэширование + Rate Limit counters',
@@ -342,48 +331,26 @@ export const allNodes: ArchNode[] = [
       viewLevel: 'cluster',
     },
   },
-  // EU Event Bus + Schema Registry + DLQ
+  // EU Event Bus (includes Schema Registry + DLQ internally)
   {
     id: 'dc-eu-kafka',
     type: 'messageQueue',
-    position: { x: 2800, y: 90 },
+    position: { x: 2800, y: 180 },
     data: {
       label: 'Event Bus',
-      description: 'Event Streaming — domain topics: orders.*, payments.*, inventory.*',
+      description: 'Event Streaming + Schema Registry + DLQ внутри',
       technology: 'e.g. Kafka, Wormhole',
       viewLevel: 'cluster',
     },
   },
-  {
-    id: 'dc-eu-schema-registry',
-    type: 'service',
-    position: { x: 3050, y: 90 },
-    data: {
-      label: 'Schema Registry',
-      description: 'Schema Validation — контракты событий (Avro/Protobuf)',
-      technology: 'e.g. Schema Registry',
-      viewLevel: 'cluster',
-    },
-  },
-  {
-    id: 'dc-eu-dlq',
-    type: 'messageQueue',
-    position: { x: 2800, y: 230 },
-    data: {
-      label: 'Dead Letter Queue',
-      description: 'DLQ topics: *.dlq — failed messages после 3 retry',
-      technology: 'DLQ Topics',
-      viewLevel: 'cluster',
-    },
-  },
-  // EU Security Layer (WAF + Rate Limiter)
+  // EU Security Layer (WAF + Rate Limiter with in-memory counters)
   {
     id: 'dc-eu-ratelimit',
     type: 'securityLayer',
     position: { x: 1250, y: 180 },
     data: {
       label: 'Security Layer',
-      description: 'WAF + Rate Limiting — защита от атак и перегрузки',
+      description: 'WAF + Rate Limiting (in-memory sliding window)',
       technology: 'WAF + Token Bucket',
       viewLevel: 'datacenter',
     },
@@ -403,7 +370,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-jaeger',
     type: 'service',
-    position: { x: 2800, y: 370 },
+    position: { x: 2800, y: 450 },
     data: {
       label: 'Distributed Tracing',
       description: 'Distributed Tracing — отслеживание запросов через систему',
@@ -415,7 +382,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-eu-istiod',
     type: 'service',
-    position: { x: 1750, y: 180 },
+    position: { x: 1750, y: 260 },
     data: {
       label: 'Mesh Control Plane',
       description: 'Service Mesh Control Plane — управление sidecar proxies',
@@ -463,9 +430,9 @@ export const allNodes: ArchNode[] = [
     type: 'ingress',
     position: { x: 1750, y: 700 },
     data: {
-      label: 'Ingress Controller',
-      description: 'Ingress Controller — L7 роутинг в кластер оркестрации',
-      technology: 'NGINX',
+      label: 'Internal Router',
+      description: 'L7 Router — маршрутизация к сервисам внутри кластера',
+      technology: 'e.g. Envoy, NGINX',
       viewLevel: 'cluster',
     },
   },
@@ -478,14 +445,14 @@ export const allNodes: ArchNode[] = [
       description: 'Read Replica — только чтение',
       technology: 'Java / Spring',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-us-order-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-us-order-svc',
     extent: 'parent',
     data: {
@@ -499,7 +466,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-us-order-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-us-order-svc',
     extent: 'parent',
     data: {
@@ -513,20 +480,20 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-us-user-svc',
     type: 'serviceGroup',
-    position: { x: 2020, y: 740 },
+    position: { x: 2020, y: 780 },
     data: {
       label: 'User Service',
       description: 'Read Replica — только чтение',
       technology: 'Go / gRPC',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-us-user-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-us-user-svc',
     extent: 'parent',
     data: {
@@ -540,7 +507,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-us-user-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-us-user-svc',
     extent: 'parent',
     data: {
@@ -554,7 +521,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-us-cache',
     type: 'cache',
-    position: { x: 2550, y: 620 },
+    position: { x: 2550, y: 680 },
     data: {
       label: 'Local Cache',
       description: 'Cache-Aside — локальный кэш для снижения latency',
@@ -565,7 +532,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-us-db',
     type: 'database',
-    position: { x: 2550, y: 760 },
+    position: { x: 2550, y: 820 },
     data: {
       label: 'Read Replica',
       description: 'Read Replica — только чтение, async replication',
@@ -576,7 +543,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-us-cdc',
     type: 'service',
-    position: { x: 2550, y: 880 },
+    position: { x: 2550, y: 960 },
     data: {
       label: 'CDC Consumer',
       description: 'Change Data Capture — применяет события к локальной БД',
@@ -624,9 +591,9 @@ export const allNodes: ArchNode[] = [
     type: 'ingress',
     position: { x: 1750, y: 1200 },
     data: {
-      label: 'Ingress Controller',
-      description: 'Ingress Controller — L7 роутинг в кластер оркестрации',
-      technology: 'NGINX',
+      label: 'Internal Router',
+      description: 'L7 Router — маршрутизация к сервисам внутри кластера',
+      technology: 'e.g. Envoy, NGINX',
       viewLevel: 'cluster',
     },
   },
@@ -639,14 +606,14 @@ export const allNodes: ArchNode[] = [
       description: 'Read Replica — только чтение',
       technology: 'Java / Spring',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-asia-order-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-asia-order-svc',
     extent: 'parent',
     data: {
@@ -660,7 +627,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-asia-order-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-asia-order-svc',
     extent: 'parent',
     data: {
@@ -674,20 +641,20 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-asia-user-svc',
     type: 'serviceGroup',
-    position: { x: 2020, y: 1240 },
+    position: { x: 2020, y: 1280 },
     data: {
       label: 'User Service',
       description: 'Read Replica — только чтение',
       technology: 'Go / gRPC',
       viewLevel: 'cluster',
-      width: 200,
-      height: 80,
+      width: 260,
+      height: 110,
     },
   },
   {
     id: 'dc-asia-user-pod',
     type: 'pod',
-    position: { x: 15, y: 25 },
+    position: { x: 15, y: 35 },
     parentNode: 'dc-asia-user-svc',
     extent: 'parent',
     data: {
@@ -701,7 +668,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-asia-user-pod-2',
     type: 'pod',
-    position: { x: 105, y: 25 },
+    position: { x: 135, y: 35 },
     parentNode: 'dc-asia-user-svc',
     extent: 'parent',
     data: {
@@ -715,7 +682,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-asia-cache',
     type: 'cache',
-    position: { x: 2550, y: 1120 },
+    position: { x: 2550, y: 1180 },
     data: {
       label: 'Local Cache',
       description: 'Cache-Aside — локальный кэш для снижения latency',
@@ -726,7 +693,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-asia-db',
     type: 'database',
-    position: { x: 2550, y: 1260 },
+    position: { x: 2550, y: 1320 },
     data: {
       label: 'Read Replica',
       description: 'Read Replica — только чтение, async replication',
@@ -737,7 +704,7 @@ export const allNodes: ArchNode[] = [
   {
     id: 'dc-asia-cdc',
     type: 'service',
-    position: { x: 2550, y: 1380 },
+    position: { x: 2550, y: 1460 },
     data: {
       label: 'CDC Consumer',
       description: 'Change Data Capture — применяет события к локальной БД',
@@ -777,9 +744,7 @@ export const allEdges: ArchEdge[] = [
   { id: 'e-dc-eu-lb', source: 'dc-eu', target: 'dc-eu-lb' },
   { id: 'e-dc-eu-lb-gw', source: 'dc-eu-lb', target: 'dc-eu-gw' },
   { id: 'e-dc-eu-gw-auth', source: 'dc-eu-gw', target: 'dc-eu-auth' },
-  { id: 'e-dc-eu-auth-session', source: 'dc-eu-auth', target: 'dc-eu-session' },
   { id: 'e-dc-eu-lb-ratelimit', source: 'dc-eu-lb', target: 'dc-eu-ratelimit' },
-  { id: 'e-dc-eu-ratelimit-cache', source: 'dc-eu-ratelimit', target: 'dc-eu-cache', style: { strokeDasharray: '4,4' } },
   { id: 'e-dc-eu-gw-ingress', source: 'dc-eu-gw', target: 'dc-eu-ingress' },
 
   // Mesh Control Plane (управление sidecar proxies) - пунктирная линия
@@ -808,10 +773,6 @@ export const allEdges: ArchEdge[] = [
   { id: 'e-dc-eu-order-svc-kafka', source: 'dc-eu-order-svc', target: 'dc-eu-kafka' },
   { id: 'e-dc-eu-payment-svc-kafka', source: 'dc-eu-payment-svc', target: 'dc-eu-kafka' },
   { id: 'e-dc-eu-inventory-svc-kafka', source: 'dc-eu-inventory-svc', target: 'dc-eu-kafka' },
-
-  // Kafka infrastructure
-  { id: 'e-dc-eu-kafka-schema', source: 'dc-eu-kafka', target: 'dc-eu-schema-registry', style: { strokeDasharray: '3,3', stroke: '#10B981' } },
-  { id: 'e-dc-eu-kafka-dlq', source: 'dc-eu-kafka', target: 'dc-eu-dlq', style: { strokeDasharray: '4,4', stroke: '#EF4444' } },
 
   // Inter-service mesh (Order ↔ User)
   { id: 'e-dc-eu-order-user-mesh', source: 'dc-eu-order-svc', target: 'dc-eu-user-svc', style: { strokeDasharray: '2,2', stroke: '#06B6D4' } },

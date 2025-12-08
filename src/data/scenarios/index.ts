@@ -150,57 +150,16 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
 ЧТО ПРОИСХОДИТ:
 1. WAF проверяет запрос на SQL injection, XSS, OWASP Top 10
 2. Проверяется IP reputation и geo-blocking
-3. Rate Limiter проверяет Cache: текущий счётчик по IP/User
-4. Применяет Token Bucket алгоритм (100 req/min)
+3. In-memory sliding window: 46/100 req/min → OK
+4. Добавляются headers: X-RateLimit-Remaining: 54
 
-ПАТТЕРН: Security Layer = WAF + Rate Limiting в одном компоненте.`,
+ПАТТЕРН: Security Layer = WAF + Rate Limiting (in-memory counters).`,
         duration: 400,
         realLatency: 1,
-        payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 45, limit: 100 },
+        payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 46, limit: 100 },
       },
       {
         id: 'step-8',
-        fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-cache',
-        edgeId: 'e-dc-eu-ratelimit-cache',
-        type: 'request',
-        title: 'Security Layer → Cache',
-        description: 'Проверка счётчика rate limit в Distributed Cache',
-        detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов Security Layer.
-
-ЧТО ПРОИСХОДИТ:
-1. INCR rate:user_123:orders (атомарный инкремент)
-2. EXPIRE устанавливает TTL=60 сек (sliding window)
-3. Если счётчик > limit → возврат 429 Too Many Requests
-
-ПАТТЕРН: Sliding Window Rate Limiting в Distributed Cache.`,
-        duration: 240,
-        realLatency: 0.5,
-        payload: { key: 'rate:user_123:orders', operation: 'INCR', ttl: 60 },
-      },
-      {
-        id: 'step-9',
-        fromNode: 'dc-eu-cache',
-        toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-ratelimit-cache',
-        reverse: true,
-        type: 'response',
-        title: 'Rate Limit OK',
-        description: 'Cache подтверждает что лимит не превышен',
-        detailedInfo: `ЗАЧЕМ: Разрешить или заблокировать запрос.
-
-ЧТО ПРОИСХОДИТ:
-1. Cache вернул текущее значение счётчика: 46
-2. 46 < 100 (лимит) → запрос разрешён
-3. Добавляются headers: X-RateLimit-Remaining: 54
-
-РЕЗУЛЬТАТ: Запрос прошёл rate limiting.`,
-        duration: 160,
-        realLatency: 0.1,
-        payload: { allowed: true, current: 46, limit: 100, remaining: 54 },
-      },
-      {
-        id: 'step-10',
         fromNode: 'dc-eu-ratelimit',
         toNode: 'dc-eu-lb',
         edgeId: 'e-dc-eu-lb-ratelimit',
@@ -208,20 +167,17 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         type: 'response',
         title: 'Security Check Passed',
         description: 'Security Layer разрешает запрос',
-        detailedInfo: `ЗАЧЕМ: Load Balancer должен знать результат проверки.
+        detailedInfo: `РЕЗУЛЬТАТ: Все проверки пройдены.
 
-ЧТО ПРОИСХОДИТ:
-1. WAF проверки пройдены (no threats detected)
-2. Rate limit не превышен → Security Layer возвращает OK
-3. Запрос продолжает путь к API Gateway
-
-ПАТТЕРН: Security Layer как Policy Enforcement Point.`,
+• WAF: no threats detected
+• Rate limit: 46/100 (OK)
+• Headers: X-RateLimit-Remaining: 54`,
         duration: 160,
         realLatency: 0.5,
         payload: { status: 'allowed' },
       },
       {
-        id: 'step-11',
+        id: 'step-9',
         fromNode: 'dc-eu-lb',
         toNode: 'dc-eu-gw',
         edgeId: 'e-dc-eu-lb-gw',
@@ -245,73 +201,27 @@ Sticky Sessions не используются — stateless архитектур
 
       // ========== АВТОРИЗАЦИЯ ==========
       {
-        id: 'step-12',
+        id: 'step-10',
         fromNode: 'dc-eu-gw',
         toNode: 'dc-eu-auth',
         edgeId: 'e-dc-eu-gw-auth',
         type: 'request',
         title: 'JWT Token Validation',
-        description: 'API Gateway валидирует токен локально + проверяет blacklist',
+        description: 'Auth Service валидирует токен + проверяет blacklist',
         detailedInfo: `ЗАЧЕМ: Убедиться что запрос от авторизованного пользователя.
 
 ЧТО ПРОИСХОДИТ:
-1. API Gateway извлекает Bearer token из Authorization header
-2. ЛОКАЛЬНАЯ проверка (без сети, ~1ms):
-   - Подпись RS256 проверяется публичным ключом (cached)
-   - Expiration (exp) — не истёк ли токен
-   - Issuer (iss), Audience (aud) — валидность claims
-3. Если подпись OK → проверяем blacklist в Auth Service
+1. Подпись RS256 проверяется публичным ключом
+2. Expiration (exp), Issuer (iss), Audience (aud)
+3. In-memory blacklist check (токен не отозван)
 
-ПАТТЕРН: Token-based Authentication — stateless аутентификация.
-В BigTech 99% запросов валидируются локально без похода в Auth Service.`,
+ПАТТЕРН: Token-based Authentication + Blacklisting внутри одного сервиса.`,
         duration: 400,
         realLatency: 1,
-        payload: { token: 'eyJhbGciOiJSUzI1NiIs...', localChecks: ['signature', 'expiration', 'issuer'] },
+        payload: { token: 'eyJhbGciOiJSUzI1NiIs...', checks: ['signature', 'expiration', 'blacklist'] },
       },
       {
-        id: 'step-13',
-        fromNode: 'dc-eu-auth',
-        toNode: 'dc-eu-session',
-        edgeId: 'e-dc-eu-auth-session',
-        type: 'request',
-        title: 'Token Blacklist Check',
-        description: 'Проверка что токен не был отозван (logout/security)',
-        detailedInfo: `ЗАЧЕМ: JWT нельзя инвалидировать без blacklist (токен валиден до exp).
-
-ЧТО ПРОИСХОДИТ:
-1. SISMEMBER blacklist:tokens <jti> — проверка в Set (~0.1ms)
-2. Если токен в blacklist → 401 Unauthorized
-3. Bloom Filter может использоваться для оптимизации
-
-ПАТТЕРН: Token Blacklisting — единственный способ отзыва JWT.
-In-memory Set с TTL = max token lifetime (обычно 24h).`,
-        duration: 240,
-        realLatency: 0.5,
-        payload: { operation: 'SISMEMBER', key: 'blacklist:tokens', jti: 'abc123-xyz789' },
-      },
-      {
-        id: 'step-14',
-        fromNode: 'dc-eu-session',
-        toNode: 'dc-eu-auth',
-        edgeId: 'e-dc-eu-auth-session',
-        reverse: true,
-        type: 'response',
-        title: 'Token NOT in Blacklist',
-        description: 'Cache: токен не отозван, всё OK',
-        detailedInfo: `ЗАЧЕМ: Подтвердить что токен не был отозван.
-
-ЧТО ПРОИСХОДИТ:
-1. SISMEMBER вернул 0 → токен НЕ в blacklist
-2. Это значит пользователь не делал logout
-3. Токен валиден — можно продолжать
-
-РЕЗУЛЬТАТ: Аутентификация завершена.`,
-        duration: 160,
-        realLatency: 0.1,
-        payload: { inBlacklist: false, responseTime: '0.1ms' },
-      },
-      {
-        id: 'step-15',
+        id: 'step-11',
         fromNode: 'dc-eu-auth',
         toNode: 'dc-eu-gw',
         edgeId: 'e-dc-eu-gw-auth',
@@ -347,7 +257,7 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
 ЧТО ПРОИСХОДИТ:
 1. API Gateway определяет target service по path (/api/v1/orders → Order Service)
 2. Добавляет headers: X-User-Id, X-Request-Id, X-Trace-Id
-3. Проксирует в Ingress Controller
+3. Проксирует в Internal Router
 
 ПАТТЕРН: API Gateway Pattern — единая точка входа.`,
         duration: 1200,
@@ -360,16 +270,16 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         toNode: 'dc-eu-order-svc',
         edgeId: 'e-dc-eu-ingress-order-svc',
         type: 'request',
-        title: 'Ingress → Order Service',
-        description: 'Ingress Controller роутит на Service по правилам',
-        detailedInfo: `ЗАЧЕМ: Ingress — L7 роутер внутри Compute Cluster.
+        title: 'Router → Order Service',
+        description: 'Internal Router роутит на Service по правилам',
+        detailedInfo: `ЗАЧЕМ: Internal Router — L7 роутер внутри Compute Cluster.
 
 ЧТО ПРОИСХОДИТ:
-1. Ingress Controller сопоставляет path с Ingress Rule
+1. Router сопоставляет path с routing rule
 2. Правило: /api/v1/orders/* → order-service:8080
 3. Направляет на внутренний Service endpoint
 
-ПАТТЕРН: Ingress Controller — внешний доступ к сервисам кластера.`,
+ПАТТЕРН: Internal L7 Router — маршрутизация к сервисам кластера.`,
         duration: 800,
         realLatency: 1,
         payload: { ingressRule: 'orders-ingress', path: '/api/v1/orders', targetPort: 8080 },
@@ -462,53 +372,6 @@ SAGA Choreography — сервисы подписаны на нужные topics
         duration: 800,
         realLatency: 5,
         payload: { topic: 'orders.created', key: 'order_789', partition: 3 },
-      },
-
-      // ========== SCHEMA VALIDATION ==========
-      {
-        id: 'step-21a',
-        fromNode: 'dc-eu-kafka',
-        toNode: 'dc-eu-schema-registry',
-        edgeId: 'e-dc-eu-kafka-schema',
-        type: 'request',
-        title: 'Schema Validation',
-        description: 'Event Bus проверяет схему события в Schema Registry',
-        detailedInfo: `ЗАЧЕМ: Гарантировать что все producers и consumers используют совместимые схемы.
-
-ЧТО ПРОИСХОДИТ:
-1. Producer сериализует событие в Avro/Protobuf формат
-2. Event Bus отправляет schema fingerprint в Schema Registry
-3. Registry проверяет: существует ли схема? совместима ли с предыдущими версиями?
-4. Если схема новая — регистрирует с новым schema_id
-
-ПАТТЕРН: Schema Registry — централизованное управление контрактами.
-Backward/Forward Compatibility — защита от breaking changes.`,
-        duration: 400,
-        realLatency: 2,
-        payload: { schemaType: 'AVRO', subject: 'orders.created-value', action: 'validate' },
-      },
-      {
-        id: 'step-21b',
-        fromNode: 'dc-eu-schema-registry',
-        toNode: 'dc-eu-kafka',
-        edgeId: 'e-dc-eu-kafka-schema',
-        reverse: true,
-        type: 'response',
-        title: 'Schema Valid (ID: 42)',
-        description: 'Schema Registry подтверждает валидность схемы',
-        detailedInfo: `ЗАЧЕМ: Разрешить запись сообщения в topic.
-
-ЧТО ПРОИСХОДИТ:
-1. Schema Registry вернул schema_id=42
-2. Этот ID записывается в header сообщения
-3. Consumers используют schema_id для десериализации
-4. Сообщение записано в partition 3
-
-ПАТТЕРН: Schema Evolution — версионирование схем.
-Consumers могут читать старые сообщения новой схемой (и наоборот).`,
-        duration: 200,
-        realLatency: 1,
-        payload: { schemaId: 42, version: 3, compatible: true },
       },
 
       // ========== SAGA: INVENTORY ==========
@@ -916,8 +779,8 @@ SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
         edgeId: 'e-dc-eu-ingress-order-svc',
         reverse: true,
         type: 'response',
-        title: 'Service → Ingress',
-        description: 'Response проходит через Ingress Controller',
+        title: 'Service → Router',
+        description: 'Response проходит через Internal Router',
         detailedInfo: `ЗАЧЕМ: Ingress собирает метрики и логи response.
 
 ЧТО ПРОИСХОДИТ:
@@ -937,7 +800,7 @@ SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
         edgeId: 'e-dc-eu-gw-ingress',
         reverse: true,
         type: 'response',
-        title: 'Ingress → API Gateway',
+        title: 'Router → API Gateway',
         description: 'API Gateway добавляет финальные headers',
         detailedInfo: `ЗАЧЕМ: API Gateway — последняя точка обработки перед выходом из ДЦ.
 
@@ -1172,47 +1035,6 @@ Trade-off: consistency vs latency.`,
         payload: { targetRegion: 'ap-southeast-1', totalLag: '~200ms', distance: '~10000km' },
       },
 
-      // ========== ERROR HANDLING: DLQ ==========
-      {
-        id: 'step-50',
-        fromNode: 'dc-eu-kafka',
-        toNode: 'dc-eu-dlq',
-        edgeId: 'e-dc-eu-kafka-dlq',
-        type: 'async',
-        title: '[Error Path] Dead Letter Queue',
-        description: 'Что происходит при ошибке обработки сообщения',
-        detailedInfo: `ЗАЧЕМ: Не потерять сообщения при ошибках обработки.
-
-⚠️ ЭТО ERROR PATH — в успешном сценарии не происходит!
-
-КОГДА СРАБАТЫВАЕТ:
-1. Consumer не смог обработать сообщение (exception)
-2. Retry policy: 3 попытки с exponential backoff (1s, 2s, 4s)
-3. После 3 failed retries → сообщение идёт в DLQ
-
-ЧТО ПРОИСХОДИТ:
-1. Event Bus перемещает сообщение в topic: orders.created.dlq
-2. Alert в PagerDuty: "DLQ message count > 0"
-3. On-call engineer разбирается с причиной
-4. После fix — replay сообщений из DLQ
-
-ТИПИЧНЫЕ ПРИЧИНЫ ОШИБОК:
-• Невалидные данные (schema mismatch)
-• Timeout при обращении к внешнему сервису
-• Database constraint violation
-• Bug в consumer коде
-
-ПАТТЕРН: Dead Letter Queue — изоляция проблемных сообщений.
-Позволяет системе продолжать работу несмотря на ошибки.`,
-        duration: 400,
-        realLatency: 5,
-        payload: {
-          dlqTopic: 'orders.created.dlq',
-          retryPolicy: { maxRetries: 3, backoff: 'exponential' },
-          alertChannel: 'pagerduty',
-          note: 'This step only occurs on processing failures'
-        },
-      },
     ],
   },
 
@@ -1420,12 +1242,12 @@ US DC работает как обычно, не знает о проблема�
         toNode: 'dc-us-ingress',
         edgeId: 'e-dc-us-gw-ingress',
         type: 'request',
-        title: 'API Gateway → Ingress',
+        title: 'API Gateway → Router',
         description: 'Маршрутизация в Compute Cluster',
         detailedInfo: `ЧТО ПРОИСХОДИТ:
 1. API Gateway проверяет JWT (локально)
 2. Rate limiting (отдельные лимиты для US DC)
-3. Роутинг на Ingress Controller
+3. Роутинг на Internal Router
 
 ⚠️ Если бы это был POST (создание заказа):
 US DC вернул бы 307 Redirect на EU DC
@@ -1440,7 +1262,7 @@ US DC вернул бы 307 Redirect на EU DC
         toNode: 'dc-us-order-svc',
         edgeId: 'e-dc-us-ingress-order',
         type: 'request',
-        title: 'Ingress → Order Service',
+        title: 'Router → Order Service',
         description: 'NGINX роутит на сервис',
         detailedInfo: `ЧТО ПРОИСХОДИТ:
 1. Ingress rule: /api/v1/orders/* → order-service
@@ -1539,7 +1361,7 @@ US DC вернул бы 307 Redirect на EU DC
         edgeId: 'e-dc-us-ingress-order',
         reverse: true,
         type: 'response',
-        title: 'Service → Ingress',
+        title: 'Service → Router',
         description: 'Response через Ingress',
         detailedInfo: `Ingress логирует response и передаёт дальше.`,
         duration: 200,
@@ -1553,7 +1375,7 @@ US DC вернул бы 307 Redirect на EU DC
         edgeId: 'e-dc-us-gw-ingress',
         reverse: true,
         type: 'response',
-        title: 'Ingress → API Gateway',
+        title: 'Router → API Gateway',
         description: 'Response через API Gateway',
         detailedInfo: `API Gateway добавляет стандартные headers.`,
         duration: 200,
@@ -1803,64 +1625,19 @@ Security Layer (WAF + Rate Limiting) — первая линия защиты!
 ЛИМИТЫ ДЛЯ user_456:
 • POST /orders: 10 req/min (обычные пользователи)
 • Premium users: 100 req/min
-• Total API: 1000 req/min
 
-ТЕКУЩИЙ СТАТУС user_456:
-• Запросов за минуту: 10
-• Следующий запрос: ПРЕВЫСИТ ЛИМИТ!`,
+In-memory sliding window check:
+• Current count: 11
+• Limit: 10
+• 11 > 10 → ПРЕВЫШЕН!
+
+РЕШЕНИЕ: Отклонить запрос с 429.`,
         duration: 400,
         realLatency: 1,
-        payload: { userId: 'user_456', endpoint: 'POST /orders', currentCount: 10, limit: 10 },
+        payload: { userId: 'user_456', endpoint: 'POST /orders', currentCount: 11, limit: 10 },
       },
       {
         id: 'over-8',
-        fromNode: 'dc-eu-ratelimit',
-        toNode: 'dc-eu-cache',
-        edgeId: 'e-dc-eu-ratelimit-cache',
-        type: 'request',
-        title: 'Check Rate Counter',
-        description: 'Проверка счётчика в Cache',
-        detailedInfo: `ЧТО ПРОИСХОДИТ:
-1. INCR rate:user_456:orders:minute
-2. Текущее значение: 11
-3. Лимит: 10
-4. 11 > 10 → ПРЕВЫШЕН!
-
-АЛГОРИТМ: Token Bucket
-• Bucket size: 10 tokens
-• Refill rate: 10 tokens/minute
-• Current tokens: 0 (все использованы)`,
-        duration: 300,
-        realLatency: 0.5,
-        payload: { key: 'rate:user_456:orders:minute', operation: 'INCR' },
-      },
-      {
-        id: 'over-9',
-        fromNode: 'dc-eu-cache',
-        toNode: 'dc-eu-ratelimit',
-        edgeId: 'e-dc-eu-ratelimit-cache',
-        reverse: true,
-        type: 'response',
-        title: '🔴 LIMIT EXCEEDED',
-        description: 'Лимит запросов превышен',
-        detailedInfo: `CACHE ОТВЕТ:
-• Current count: 11
-• Limit: 10
-• TTL: 45 seconds (до сброса)
-
-РЕШЕНИЕ: Отклонить запрос с 429.
-
-ЭТО ЗАЩИЩАЕТ:
-• Backend сервисы от перегрузки
-• API Gateway от лишней работы
-• Других пользователей от degradation
-• Базы данных от исчерпания connections`,
-        duration: 200,
-        realLatency: 0.5,
-        payload: { exceeded: true, current: 11, limit: 10, retryAfter: 45 },
-      },
-      {
-        id: 'over-10',
         fromNode: 'dc-eu-ratelimit',
         toNode: 'dc-eu-lb',
         edgeId: 'e-dc-eu-lb-ratelimit',
@@ -2095,7 +1872,7 @@ WAF: OK ✓ Rate Limit: OK ✓`,
         toNode: 'dc-eu-ingress',
         edgeId: 'e-dc-eu-gw-ingress',
         type: 'request',
-        title: 'API GW → Ingress',
+        title: 'API GW → Router',
         description: 'Маршрутизация в Compute Cluster',
         detailedInfo: `Запрос идёт в Compute Cluster.
 
@@ -2113,7 +1890,7 @@ WAF: OK ✓ Rate Limit: OK ✓`,
         toNode: 'dc-eu-order-svc',
         edgeId: 'e-dc-eu-ingress-order-svc',
         type: 'request',
-        title: 'Ingress → Order Service',
+        title: 'Router → Order Service',
         description: 'Роутинг на Order Service',
         detailedInfo: `NGINX Ingress направляет на Order Service.
 
@@ -2294,7 +2071,7 @@ PagerDuty уведомил on-call инженера.`,
         edgeId: 'e-dc-eu-ingress-order-svc',
         reverse: true,
         type: 'response',
-        title: 'Error → Ingress',
+        title: 'Error → Router',
         description: '503 идёт обратно',
         detailedInfo: `NGINX Ingress логирует 503.`,
         duration: 200,
@@ -2308,7 +2085,7 @@ PagerDuty уведомил on-call инженера.`,
         edgeId: 'e-dc-eu-gw-ingress',
         reverse: true,
         type: 'response',
-        title: 'Ingress → API Gateway',
+        title: 'Router → API Gateway',
         description: '503 через API Gateway',
         detailedInfo: `API Gateway видит 503 от backend.
 
