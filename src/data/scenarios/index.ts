@@ -4,7 +4,7 @@ export const scenarios: Scenario[] = [
   {
     id: 'create-order',
     name: 'Создание заказа (полный путь + SAGA)',
-    description: 'Запрос в EU DC: авторизация, SAGA через Kafka, репликация в другие ДЦ',
+    description: 'Запрос в EU DC: авторизация, SAGA через Event Bus, репликация в другие ДЦ',
     initialViewLevel: 'global',
     steps: [
       // ========== ПУТЬ ЗАПРОСА ОТ КЛИЕНТА ==========
@@ -149,7 +149,7 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
 
 ЧТО ПРОИСХОДИТ:
 1. Rate Limiter получает запрос
-2. Проверяет Redis: текущий счётчик по IP/User
+2. Проверяет Cache: текущий счётчик по IP/User
 3. Применяет Token Bucket алгоритм
 4. Лимиты: 100 req/min для обычных пользователей
 
@@ -164,8 +164,8 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         toNode: 'dc-eu-cache',
         edgeId: 'e-dc-eu-ratelimit-cache',
         type: 'request',
-        title: 'Rate Limiter → Redis',
-        description: 'Проверка и инкремент счётчика в Redis',
+        title: 'Rate Limiter → Cache',
+        description: 'Проверка и инкремент счётчика в Distributed Cache',
         detailedInfo: `ЗАЧЕМ: Централизованное хранение счётчиков для всех инстансов балансировщика.
 
 ЧТО ПРОИСХОДИТ:
@@ -173,7 +173,7 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
 2. EXPIRE устанавливает TTL=60 сек (sliding window)
 3. Если счётчик > limit → возврат 429 Too Many Requests
 
-ПАТТЕРН: Sliding Window Rate Limiting в Redis.`,
+ПАТТЕРН: Sliding Window Rate Limiting в Distributed Cache.`,
         duration: 240,
         realLatency: 0.5,
         payload: { key: 'rate:user_123:orders', operation: 'INCR', ttl: 60 },
@@ -186,11 +186,11 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
         reverse: true,
         type: 'response',
         title: 'Rate Limit OK',
-        description: 'Redis подтверждает что лимит не превышен',
+        description: 'Cache подтверждает что лимит не превышен',
         detailedInfo: `ЗАЧЕМ: Разрешить или заблокировать запрос.
 
 ЧТО ПРОИСХОДИТ:
-1. Redis вернул текущее значение счётчика: 46
+1. Cache вернул текущее значение счётчика: 46
 2. 46 < 100 (лимит) → запрос разрешён
 3. Добавляются headers: X-RateLimit-Remaining: 54
 
@@ -274,7 +274,7 @@ Sticky Sessions не используются — stateless архитектур
         toNode: 'dc-eu-session',
         edgeId: 'e-dc-eu-auth-session',
         type: 'request',
-        title: 'Token Blacklist Check (Redis)',
+        title: 'Token Blacklist Check',
         description: 'Проверка что токен не был отозван (logout/security)',
         detailedInfo: `ЗАЧЕМ: JWT нельзя инвалидировать без blacklist (токен валиден до exp).
 
@@ -284,7 +284,7 @@ Sticky Sessions не используются — stateless архитектур
 3. Bloom Filter может использоваться для оптимизации
 
 ПАТТЕРН: Token Blacklisting — единственный способ отзыва JWT.
-Redis Set с TTL = max token lifetime (обычно 24h).`,
+In-memory Set с TTL = max token lifetime (обычно 24h).`,
         duration: 240,
         realLatency: 0.5,
         payload: { operation: 'SISMEMBER', key: 'blacklist:tokens', jti: 'abc123-xyz789' },
@@ -297,7 +297,7 @@ Redis Set с TTL = max token lifetime (обычно 24h).`,
         reverse: true,
         type: 'response',
         title: 'Token NOT in Blacklist',
-        description: 'Redis: токен не отозван, всё OK',
+        description: 'Cache: токен не отозван, всё OK',
         detailedInfo: `ЗАЧЕМ: Подтвердить что токен не был отозван.
 
 ЧТО ПРОИСХОДИТ:
@@ -333,21 +333,21 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         payload: { userId: 'user_123', permissions: ['orders:create', 'orders:read'] },
       },
 
-      // ========== K8S ROUTING ==========
+      // ========== CLUSTER ROUTING ==========
       {
         id: 'step-16',
         fromNode: 'dc-eu-gw',
         toNode: 'dc-eu-ingress',
         edgeId: 'e-dc-eu-gw-ingress',
         type: 'request',
-        title: 'Route to Kubernetes',
-        description: 'API Gateway маршрутизирует в K8s кластер',
-        detailedInfo: `ЗАЧЕМ: API Gateway — точка входа, K8s — среда выполнения сервисов.
+        title: 'Route to Compute Cluster',
+        description: 'API Gateway маршрутизирует в Compute Cluster',
+        detailedInfo: `ЗАЧЕМ: API Gateway — точка входа, Compute Cluster — среда выполнения сервисов.
 
 ЧТО ПРОИСХОДИТ:
 1. API Gateway определяет target service по path (/api/v1/orders → Order Service)
 2. Добавляет headers: X-User-Id, X-Request-Id, X-Trace-Id
-3. Проксирует в K8s Ingress Controller
+3. Проксирует в Ingress Controller
 
 ПАТТЕРН: API Gateway Pattern — единая точка входа.`,
         duration: 1200,
@@ -360,16 +360,16 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         toNode: 'dc-eu-order-svc',
         edgeId: 'e-dc-eu-ingress-order-svc',
         type: 'request',
-        title: 'K8s Ingress → Order Service',
-        description: 'NGINX Ingress роутит на Service по правилам',
-        detailedInfo: `ЗАЧЕМ: Ingress — L7 роутер внутри Kubernetes.
+        title: 'Ingress → Order Service',
+        description: 'Ingress Controller роутит на Service по правилам',
+        detailedInfo: `ЗАЧЕМ: Ingress — L7 роутер внутри Compute Cluster.
 
 ЧТО ПРОИСХОДИТ:
-1. NGINX Ingress сопоставляет path с Ingress Rule
+1. Ingress Controller сопоставляет path с Ingress Rule
 2. Правило: /api/v1/orders/* → order-service:8080
-3. Направляет на ClusterIP Service
+3. Направляет на внутренний Service endpoint
 
-ПАТТЕРН: Ingress Controller — внешний доступ к сервисам K8s.`,
+ПАТТЕРН: Ingress Controller — внешний доступ к сервисам кластера.`,
         duration: 800,
         realLatency: 1,
         payload: { ingressRule: 'orders-ingress', path: '/api/v1/orders', targetPort: 8080 },
@@ -380,16 +380,16 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         toNode: 'dc-eu-order-pod',
         edgeId: 'e-dc-eu-order-svc-pod',
         type: 'request',
-        title: 'K8s Service → Pod',
+        title: 'Service Discovery → Pod',
         description: 'Service выбирает здоровый Pod',
-        detailedInfo: `ЗАЧЕМ: Service — абстракция над множеством Pod реплик.
+        detailedInfo: `ЗАЧЕМ: Service Discovery — абстракция над множеством Pod реплик.
 
 ЧТО ПРОИСХОДИТ:
-1. K8s Service (ClusterIP) получает запрос
-2. kube-proxy выбирает Pod по алгоритму (round-robin)
-3. Проверяет readiness probe — Pod должен быть Ready
+1. Service Discovery endpoint получает запрос
+2. Load Balancer выбирает Pod по алгоритму (round-robin)
+3. Проверяет health check — Pod должен быть Ready
 
-ПАТТЕРН: Service Discovery внутри K8s.`,
+ПАТТЕРН: Service Discovery внутри Compute Cluster.`,
         duration: 400,
         realLatency: 0.5,
         payload: { selectedPod: 'order-pod-7b4f9-x2k4n', replicas: 3, readyReplicas: 3 },
@@ -426,11 +426,11 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         reverse: true,
         type: 'response',
         title: 'Order Persisted',
-        description: 'PostgreSQL подтверждает сохранение',
+        description: 'Database подтверждает сохранение',
         detailedInfo: `ЗАЧЕМ: Гарантировать что заказ сохранён перед продолжением.
 
 ЧТО ПРОИСХОДИТ:
-1. PostgreSQL выполняет INSERT в транзакции
+1. Database выполняет INSERT в транзакции
 2. WAL (Write-Ahead Log) фиксирует изменение
 3. fsync на диск — данные durable
 4. Возвращает подтверждение с orderId
@@ -441,7 +441,7 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
         payload: { success: true, orderId: 'order_789', createdAt: '2024-01-15T10:30:00Z' },
       },
 
-      // ========== SAGA: PUBLISH TO KAFKA ==========
+      // ========== SAGA: PUBLISH TO EVENT BUS ==========
       {
         id: 'step-21',
         fromNode: 'dc-eu-order-pod',
@@ -472,12 +472,12 @@ SAGA Choreography — сервисы подписаны на нужные topics
         edgeId: 'e-dc-eu-kafka-schema',
         type: 'request',
         title: 'Schema Validation',
-        description: 'Kafka проверяет схему события в Schema Registry',
+        description: 'Event Bus проверяет схему события в Schema Registry',
         detailedInfo: `ЗАЧЕМ: Гарантировать что все producers и consumers используют совместимые схемы.
 
 ЧТО ПРОИСХОДИТ:
 1. Producer сериализует событие в Avro/Protobuf формат
-2. Kafka отправляет schema fingerprint в Schema Registry
+2. Event Bus отправляет schema fingerprint в Schema Registry
 3. Registry проверяет: существует ли схема? совместима ли с предыдущими версиями?
 4. Если схема новая — регистрирует с новым schema_id
 
@@ -525,7 +525,7 @@ Consumers могут читать старые сообщения новой с�
 
 ЧТО ПРОИСХОДИТ:
 1. Consumer group "inventory-orders-consumer" подписан на orders.created
-2. Kafka доставляет событие одному consumer в группе
+2. Event Bus доставляет событие одному consumer в группе
 3. Idempotency key (orderId) предотвращает дублирование
 
 ПАТТЕРН: Consumer Group — параллельная обработка партиций.`,
@@ -731,7 +731,7 @@ SAGA успешно завершена!`,
         reverse: true,
         type: 'response',
         title: 'Order Status Updated',
-        description: 'PostgreSQL подтверждает обновление статуса',
+        description: 'Database подтверждает обновление статуса',
         detailedInfo: `ЗАЧЕМ: Подтвердить что статус заказа изменён.
 
 ЧТО ПРОИСХОДИТ:
@@ -753,12 +753,12 @@ SAGA успешно завершена!`,
         edgeId: 'e-dc-eu-order-user-mesh',
         type: 'request',
         title: 'Order Pod → User Pod (Service Mesh)',
-        description: 'Межсервисный вызов через Envoy sidecar proxies',
+        description: 'Межсервисный вызов через Sidecar proxies',
         detailedInfo: `ЗАЧЕМ: Получить данные пользователя для email уведомления.
 
 ЧТО ПРОИСХОДИТ:
 1. Order Pod делает gRPC вызов GetUser
-2. Envoy sidecar перехватывает трафик
+2. Sidecar proxy перехватывает трафик
 3. mTLS: взаимная аутентификация через SPIFFE IDs
 4. Circuit Breaker защищает от каскадных отказов
 
@@ -773,12 +773,12 @@ SAGA успешно завершена!`,
         toNode: 'dc-eu-cache',
         edgeId: 'e-dc-eu-user-pod-cache',
         type: 'request',
-        title: 'User Pod → Redis Cache',
+        title: 'User Pod → Cache',
         description: 'Проверка кэша',
         detailedInfo: `ЗАЧЕМ: Избежать запроса в БД если данные в кэше.
 
 ЧТО ПРОИСХОДИТ:
-1. Redis: GET user:user_123
+1. Cache: GET user:user_123
 2. TTL: 1 час — баланс между свежестью и нагрузкой на БД
 
 ПАТТЕРН: Cache-Aside (Lazy Loading).`,
@@ -794,11 +794,11 @@ SAGA успешно завершена!`,
         reverse: true,
         type: 'response',
         title: 'Cache HIT',
-        description: 'Redis: данные найдены в кэше',
+        description: 'Cache: данные найдены в кэше',
         detailedInfo: `ЗАЧЕМ: Быстро получить данные без обращения к БД.
 
 ЧТО ПРОИСХОДИТ:
-1. Redis вернул данные пользователя
+1. Cache вернул данные пользователя
 2. User Service десериализует
 3. Ответ готов за ~2ms (vs ~50ms из БД)
 
@@ -820,7 +820,7 @@ SAGA успешно завершена!`,
 
 ЧТО ПРОИСХОДИТ:
 1. User Pod формирует gRPC response
-2. Envoy sidecar отправляет ответ через mesh
+2. Sidecar proxy отправляет ответ через mesh
 3. Order Service может отправить email уведомление
 
 РЕЗУЛЬТАТ: User данные получены за ~5ms (cache hit).`,
@@ -837,22 +837,22 @@ SAGA успешно завершена!`,
         edgeId: 'e-dc-eu-pods-jaeger',
         type: 'async',
         title: 'Report Trace Spans',
-        description: 'Envoy sidecar отправляет trace spans в Jaeger',
+        description: 'Sidecar proxy отправляет trace spans в Tracing',
         detailedInfo: `ЗАЧЕМ: Distributed Tracing — отслеживание запроса через все сервисы.
 
 ЧТО ПРОИСХОДИТ:
 1. Каждый sidecar собирает spans: start_time, duration, status
 2. Spans связаны через traceId (X-Trace-Id из headers)
-3. Батчами отправляются в Jaeger collector
-4. Jaeger строит полную картину запроса
+3. Батчами отправляются в Tracing collector
+4. Tracing система строит полную картину запроса
 
-ПАТТЕРН: Distributed Tracing (OpenTelemetry/Jaeger).
+ПАТТЕРН: Distributed Tracing (OpenTelemetry).
 Позволяет найти bottlenecks и понять latency breakdown.
 
 TRACE SPANS В ЭТОМ ЗАПРОСЕ:
 • API Gateway: 2ms
 • Auth Service: 1.5ms
-• Order Service: 1200ms (DB + Kafka)
+• Order Service: 1200ms (DB + Event Bus)
 • User Service: 5ms (cache hit)
 Total: ~1.5s`,
         duration: 200,
@@ -866,18 +866,18 @@ Total: ~1.5s`,
         edgeId: 'e-dc-eu-pods-prometheus',
         type: 'async',
         title: 'Export Metrics',
-        description: 'Prometheus scrapes метрики с /metrics endpoint',
+        description: 'Metrics Collector собирает метрики с /metrics endpoint',
         detailedInfo: `ЗАЧЕМ: Мониторинг и alerting — SRE должны видеть здоровье системы.
 
 ЧТО ПРОИСХОДИТ:
-1. Envoy sidecar экспортирует метрики на :15090/stats/prometheus
-2. Prometheus каждые 15 сек делает scrape всех pods
+1. Sidecar proxy экспортирует метрики на :15090/stats/metrics
+2. Metrics Collector каждые 15 сек собирает данные со всех pods
 3. Метрики записываются в time-series DB
 
 КЛЮЧЕВЫЕ МЕТРИКИ:
 • request_duration_seconds{service="order"} = 1.2
 • request_total{service="order", status="201"} ++
-• kafka_producer_messages_total{topic="orders.created"} ++
+• eventbus_producer_messages_total{topic="orders.created"} ++
 • db_query_duration_seconds{query="insert_order"} = 0.025
 
 ПАТТЕРН: RED Metrics (Rate, Errors, Duration).
@@ -895,14 +895,14 @@ SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
         edgeId: 'e-dc-eu-order-svc-pod',
         reverse: true,
         type: 'response',
-        title: 'Order Pod → K8s Service',
+        title: 'Order Pod → Service Discovery',
         description: 'Response начинает обратный путь',
         detailedInfo: `ЗАЧЕМ: Response должен пройти обратно через всю инфраструктуру.
 
 ЧТО ПРОИСХОДИТ:
 1. Order Pod формирует HTTP response
-2. Envoy sidecar добавляет response headers
-3. Response идёт на K8s Service endpoint
+2. Sidecar proxy добавляет response headers
+3. Response идёт на Service Discovery endpoint
 
 ПАТТЕРН: Response проходит тот же путь что и request.`,
         duration: 240,
@@ -916,7 +916,7 @@ SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
         edgeId: 'e-dc-eu-ingress-order-svc',
         reverse: true,
         type: 'response',
-        title: 'K8s Service → Ingress',
+        title: 'Service → Ingress',
         description: 'Response проходит через Ingress Controller',
         detailedInfo: `ЗАЧЕМ: Ingress собирает метрики и логи response.
 
@@ -1075,19 +1075,19 @@ SLO: 99.9% запросов < 2 сек, error rate < 0.1%`,
         edgeId: 'e-dc-eu-kafka-crossdc',
         type: 'async',
         title: 'Cross-DC Event Replication',
-        description: 'MirrorMaker реплицирует события в другие регионы',
+        description: 'Event Replicator реплицирует события в другие регионы',
         detailedInfo: `ЗАЧЕМ: Синхронизировать данные между датацентрами.
 
 ЧТО ПРОИСХОДИТ:
-1. Kafka MirrorMaker 2 работает как consumer+producer
-2. Читает события из EU Kafka
-3. Публикует в US и Asia Kafka кластеры
+1. Event Replicator работает как consumer+producer
+2. Читает события из EU Event Bus
+3. Публикует в US и Asia Event Bus кластеры
 
 ПАТТЕРН: Multi-Region Replication — geo-distributed система.
 Eventual Consistency между регионами (~100ms lag).`,
         duration: 2400,
         realLatency: 80,
-        payload: { replication: 'async', sourceCluster: 'eu-kafka', targetClusters: ['us-kafka', 'asia-kafka'] },
+        payload: { replication: 'async', sourceCluster: 'eu-eventbus', targetClusters: ['us-eventbus', 'asia-eventbus'] },
       },
       {
         id: 'step-46',
@@ -1096,7 +1096,7 @@ Eventual Consistency между регионами (~100ms lag).`,
         edgeId: 'e-crossdc-us-cdc',
         type: 'async',
         title: 'US CDC Consumer receives event',
-        description: 'CDC Consumer в US DC получает событие из Kafka',
+        description: 'CDC Consumer в US DC получает событие из Event Bus',
         detailedInfo: `ЗАЧЕМ: Обработать событие и применить изменения к локальной БД.
 
 ЧТО ПРОИСХОДИТ:
@@ -1137,7 +1137,7 @@ Eventual Consistency — данные появятся через ~100ms.`,
         edgeId: 'e-crossdc-asia-cdc',
         type: 'async',
         title: 'Asia CDC Consumer receives event',
-        description: 'CDC Consumer в Asia DC получает событие из Kafka',
+        description: 'CDC Consumer в Asia DC получает событие из Event Bus',
         detailedInfo: `ЗАЧЕМ: Обработать событие и применить изменения к локальной БД.
 
 ЧТО ПРОИСХОДИТ:
@@ -1191,7 +1191,7 @@ Trade-off: consistency vs latency.`,
 3. После 3 failed retries → сообщение идёт в DLQ
 
 ЧТО ПРОИСХОДИТ:
-1. Kafka перемещает сообщение в topic: orders.created.dlq
+1. Event Bus перемещает сообщение в topic: orders.created.dlq
 2. Alert в PagerDuty: "DLQ message count > 0"
 3. On-call engineer разбирается с причиной
 4. После fix — replay сообщений из DLQ
@@ -1420,12 +1420,12 @@ US DC работает как обычно, не знает о проблема�
         toNode: 'dc-us-ingress',
         edgeId: 'e-dc-us-gw-ingress',
         type: 'request',
-        title: 'API Gateway → K8s Ingress',
-        description: 'Маршрутизация в Kubernetes',
+        title: 'API Gateway → Ingress',
+        description: 'Маршрутизация в Compute Cluster',
         detailedInfo: `ЧТО ПРОИСХОДИТ:
 1. API Gateway проверяет JWT (локально)
 2. Rate limiting (отдельные лимиты для US DC)
-3. Роутинг на K8s Ingress
+3. Роутинг на Ingress Controller
 
 ⚠️ Если бы это был POST (создание заказа):
 US DC вернул бы 307 Redirect на EU DC
@@ -1459,9 +1459,9 @@ US DC вернул бы 307 Redirect на EU DC
         edgeId: 'e-dc-us-order-svc-pod',
         type: 'request',
         title: 'Service → Order Pod',
-        description: 'K8s выбирает Pod',
+        description: 'Service Discovery выбирает Pod',
         detailedInfo: `ЧТО ПРОИСХОДИТ:
-1. kube-proxy выбирает healthy pod
+1. Load balancer выбирает healthy pod
 2. Round-robin между репликами
 3. Pod готов обработать GET запрос`,
         duration: 400,
@@ -1479,7 +1479,7 @@ US DC вернул бы 307 Redirect на EU DC
         detailedInfo: `ЗАЧЕМ: Избежать похода в БД.
 
 ЧТО ПРОИСХОДИТ:
-1. Redis GET order:123
+1. Cache GET order:123
 2. Локальный кэш US DC
 3. Данные реплицированы из EU через CDC
 
@@ -1501,7 +1501,7 @@ US DC вернул бы 307 Redirect на EU DC
         detailedInfo: `РЕЗУЛЬТАТ: Cache HIT!
 
 ЧТО ВЕРНУЛОСЬ:
-1. Order данные из локального Redis
+1. Order данные из локального Cache
 2. Данные были реплицированы 50ms назад
 3. Consistent read не гарантирован
 
@@ -1819,7 +1819,7 @@ Rate Limiting на балансере — первая линия защиты!
         edgeId: 'e-dc-eu-ratelimit-cache',
         type: 'request',
         title: 'Check Rate Counter',
-        description: 'Проверка счётчика в Redis',
+        description: 'Проверка счётчика в Cache',
         detailedInfo: `ЧТО ПРОИСХОДИТ:
 1. INCR rate:user_456:orders:minute
 2. Текущее значение: 11
@@ -1843,7 +1843,7 @@ Rate Limiting на балансере — первая линия защиты!
         type: 'response',
         title: '🔴 LIMIT EXCEEDED',
         description: 'Лимит запросов превышен',
-        detailedInfo: `REDIS ОТВЕТ:
+        detailedInfo: `CACHE ОТВЕТ:
 • Current count: 11
 • Limit: 10
 • TTL: 45 seconds (до сброса)
@@ -1908,7 +1908,7 @@ Rate Limiting на LB экономит ресурсы всей системы.`,
 ВАЖНО: Запрос был отклонён на уровне LB!
 • Не нагрузили API Gateway
 • Не нагрузили Auth Service
-• Не нагрузили K8s сервисы
+• Не нагрузили Compute Cluster сервисы
 
 МЕТРИКИ ОБНОВЛЕНЫ:
 • rate_limited_requests_total{user="user_456"} ++
@@ -2095,14 +2095,14 @@ X-RateLimit-Remaining: 0
         toNode: 'dc-eu-ingress',
         edgeId: 'e-dc-eu-gw-ingress',
         type: 'request',
-        title: 'API GW → K8s Ingress',
-        description: 'Маршрутизация в Kubernetes',
-        detailedInfo: `Запрос идёт в Kubernetes кластер.
+        title: 'API GW → Ingress',
+        description: 'Маршрутизация в Compute Cluster',
+        detailedInfo: `Запрос идёт в Compute Cluster.
 
-K8s тоже под нагрузкой:
+Кластер тоже под нагрузкой:
 • Pod CPU: 90%
 • Pending pods в очереди
-• HPA масштабирует, но не успевает`,
+• Autoscaler масштабирует, но не успевает`,
         duration: 800,
         realLatency: 2,
         payload: { clusterLoad: 'high' },
@@ -2131,11 +2131,11 @@ ORDER SERVICE СТАТУС:
         toNode: 'dc-eu-order-pod',
         edgeId: 'e-dc-eu-order-svc-pod',
         type: 'request',
-        title: 'Service → Order Pod (Envoy)',
-        description: 'Запрос идёт через Envoy sidecar',
-        detailedInfo: `⚠️ ENVOY CIRCUIT BREAKER АКТИВЕН!
+        title: 'Service → Order Pod (Sidecar)',
+        description: 'Запрос идёт через Sidecar proxy',
+        detailedInfo: `⚠️ CIRCUIT BREAKER АКТИВЕН!
 
-ENVOY ВИДИТ:
+SIDECAR PROXY ВИДИТ:
 • Error rate за 10 сек: 52%
 • Threshold: 50%
 • Circuit state: OPEN 🔴
@@ -2146,7 +2146,7 @@ CIRCUIT BREAKER КОНФИГУРАЦИЯ:
 • baseEjectionTime: 30s
 • maxEjectionPercent: 50%
 
-Когда error rate > 50%, Envoy прекращает
+Когда error rate > 50%, Sidecar proxy прекращает
 отправлять запросы на перегруженные pods.`,
         duration: 400,
         realLatency: 0.5,
@@ -2160,8 +2160,8 @@ CIRCUIT BREAKER КОНФИГУРАЦИЯ:
         reverse: true,
         type: 'request',
         title: '🔴 Circuit Breaker CHECK',
-        description: 'Envoy проверяет состояние circuit',
-        detailedInfo: `ENVOY SIDECAR РЕШАЕТ:
+        description: 'Sidecar proxy проверяет состояние circuit',
+        detailedInfo: `SIDECAR PROXY РЕШАЕТ:
 
 1. Проверяет локальный circuit state
 2. State = OPEN (открыт из-за высокого error rate)
@@ -2171,7 +2171,7 @@ CIRCUIT BREAKER КОНФИГУРАЦИЯ:
 РЕШЕНИЕ: Немедленно вернуть 503
 БЕЗ отправки запроса в Order Service!
 
-ПАТТЕРН: Circuit Breaker (Envoy/Istio)
+ПАТТЕРН: Circuit Breaker (Service Mesh)
 Защищает от cascade failures.`,
         duration: 200,
         realLatency: 0.1,
@@ -2185,7 +2185,7 @@ CIRCUIT BREAKER КОНФИГУРАЦИЯ:
         type: 'response',
         title: '🔴 Circuit OPEN',
         description: 'Запрос отклонён без вызова сервиса',
-        detailedInfo: `ISTIOD/ENVOY:
+        detailedInfo: `MESH CONTROL PLANE:
 
 Circuit Breaker в состоянии OPEN.
 Запрос НЕ будет отправлен в Order Service!
@@ -2211,11 +2211,11 @@ Circuit Breaker в состоянии OPEN.
         reverse: true,
         type: 'response',
         title: '❌ 503 Service Unavailable',
-        description: 'Envoy возвращает ошибку',
-        detailedInfo: `ENVOY RESPONSE:
+        description: 'Sidecar proxy возвращает ошибку',
+        detailedInfo: `SIDECAR RESPONSE:
 
 HTTP/1.1 503 Service Unavailable
-x-envoy-overloaded: true
+x-proxy-overloaded: true
 x-circuit-state: open
 
 {
@@ -2238,11 +2238,11 @@ x-circuit-state: open
         edgeId: 'e-dc-eu-pods-prometheus',
         type: 'async',
         title: '📊 Metrics Export',
-        description: 'Метрики Circuit Breaker в Prometheus',
+        description: 'Метрики Circuit Breaker в Metrics Collector',
         detailedInfo: `МЕТРИКИ ОТПРАВЛЕНЫ:
 
-envoy_cluster_circuit_breakers_default_cx_open{cluster="order-service"} 1
-envoy_cluster_upstream_rq_503{cluster="order-service"} ++
+proxy_cluster_circuit_breakers_open{cluster="order-service"} 1
+proxy_cluster_upstream_rq_503{cluster="order-service"} ++
 order_service_requests_total{status="503"} ++
 order_service_circuit_breaker_state{state="open"} 1
 
@@ -2263,7 +2263,7 @@ PagerDuty уведомил on-call инженера.`,
         edgeId: 'e-dc-eu-pods-jaeger',
         type: 'async',
         title: '📊 Failed Trace',
-        description: 'Trace span с ошибкой в Jaeger',
+        description: 'Trace span с ошибкой в Tracing',
         detailedInfo: `TRACE ЗАПИСАН:
 
 {
@@ -2275,7 +2275,7 @@ PagerDuty уведомил on-call инженера.`,
   "tags": {
     "http.status_code": 503,
     "error.type": "circuit_breaker_open",
-    "envoy.circuit_state": "open"
+    "proxy.circuit_state": "open"
   },
   "duration": "2ms"
 }
@@ -2391,7 +2391,7 @@ GLB может начать отводить трафик на другие ДЦ
 
 HTTP/1.1 503 Service Unavailable
 Retry-After: 15
-x-envoy-overloaded: true
+x-proxy-overloaded: true
 
 {
   "error": "service_unavailable",
