@@ -1,6 +1,6 @@
 # BigTech Architecture Visualizer
 
-Интерактивный образовательный визуализатор архитектуры распределённых систем уровня BigTech. Показывает полный путь запроса от мобильного клиента через DNS, CDN, балансировщики нагрузки, API Gateway, Kubernetes, микросервисы, кэши, базы данных и очереди сообщений.
+Интерактивный образовательный визуализатор архитектуры распределённых систем уровня BigTech. Показывает полный путь запроса от мобильного клиента через DNS, CDN, балансировщики нагрузки, API Gateway, container orchestration, микросервисы, кэши, базы данных и очереди сообщений.
 
 **[Открыть демо](https://iltsarev.github.io/bigtechDesign25/)**
 
@@ -22,10 +22,10 @@
 - DNS Lookup и Geo-routing
 - CDN как edge proxy и WAF
 - Global и Regional Load Balancing
-- JWT авторизация с blacklist в Redis
+- JWT авторизация с blacklist в distributed cache
 - Rate Limiting (Token Bucket)
 - Service Mesh с sidecar proxies
-- SAGA паттерн через Kafka
+- SAGA паттерн через Event Bus
 - Репликация между датацентрами
 
 [Подробное описание →](docs/scenarios/create-order.md)
@@ -96,10 +96,10 @@ npm run build
 Клиент → DNS → CDN → Global LB → Data Centers (EU, US, Asia)
 
 ### Datacenter Level
-Regional LB → Rate Limiter → API Gateway → Auth → K8s Cluster
+Regional LB → Rate Limiter → API Gateway → Auth → Compute Cluster
 
 ### Cluster Level
-Ingress → Services → Pods → Sidecars → Cache/DB/Kafka
+Ingress → Services → Pods → Sidecars → Cache/DB/Event Bus
 
 ## Лицензия
 
