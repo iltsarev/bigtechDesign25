@@ -46,7 +46,11 @@ Geo-DNS позволяет направлять пользователей в б
 3. TTL=300 сек — клиент будет кэшировать ответ 5 минут
 
 ПАТТЕРН: Anycast — один IP адрес анонсируется из множества локаций.
-Снижает latency на 50-200ms за счёт географической близости.`,
+Снижает latency на 50-200ms за счёт географической близости.
+
+⚠️ TRADE-OFF TTL: При failover клиенты с кэшированным DNS будут
+пытаться подключиться к старому (мёртвому) IP до истечения TTL (5 мин).
+Короткий TTL = быстрый failover, но больше DNS запросов.`,
         duration: 3200,
         realLatency: 5,
         payload: { ip: '104.16.123.96', ttl: 300, location: 'Frankfurt Edge' },
@@ -150,10 +154,11 @@ DMZ (Demilitarized Zone) — буферная зона между интерне
 ЧТО ПРОИСХОДИТ:
 1. WAF проверяет запрос на SQL injection, XSS, OWASP Top 10
 2. Проверяется IP reputation и geo-blocking
-3. In-memory sliding window: 46/100 req/min → OK
+3. Adaptive sliding window: 46/100 req/min → OK
 4. Добавляются headers: X-RateLimit-Remaining: 54
 
-ПАТТЕРН: Security Layer = WAF + Rate Limiting (in-memory counters).`,
+ПАТТЕРН: Adaptive Rate Limiting — лимиты меняются в зависимости от нагрузки системы.
+При низкой нагрузке лимиты выше, при высокой — ужесточаются (graceful degradation).`,
         duration: 400,
         realLatency: 1,
         payload: { userId: 'user_123', endpoint: '/api/v1/orders', currentRate: 46, limit: 100 },
@@ -207,18 +212,19 @@ Sticky Sessions не используются — stateless архитектур
         edgeId: 'e-dc-eu-gw-auth',
         type: 'request',
         title: 'JWT Token Validation',
-        description: 'Auth Service валидирует токен + проверяет blacklist',
+        description: 'Auth Service валидирует короткоживущий JWT (15 мин)',
         detailedInfo: `ЗАЧЕМ: Убедиться что запрос от авторизованного пользователя.
 
 ЧТО ПРОИСХОДИТ:
 1. Подпись RS256 проверяется публичным ключом
 2. Expiration (exp), Issuer (iss), Audience (aud)
-3. In-memory blacklist check (токен не отозван)
+3. Короткое время жизни токена (15 мин) делает revocation менее критичным
 
-ПАТТЕРН: Token-based Authentication + Blacklisting внутри одного сервиса.`,
+ПАТТЕРН: Short-lived JWT + Refresh Token flow.
+Вместо blacklist используем короткоживущие токены — при logout пользователь просто не получит новый refresh token.`,
         duration: 400,
         realLatency: 1,
-        payload: { token: 'eyJhbGciOiJSUzI1NiIs...', checks: ['signature', 'expiration', 'blacklist'] },
+        payload: { token: 'eyJhbGciOiJSUzI1NiIs...', checks: ['signature', 'expiration', 'issuer'], ttl: '15min' },
       },
       {
         id: 'step-11',
@@ -323,7 +329,9 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
 4. Генерация orderId (UUID v4)
 
 ПАТТЕРН: SAGA Pattern начинается — это первый шаг.
-Статус PENDING — заказ создан, но не подтверждён.`,
+Статус PENDING — заказ создан, но не подтверждён.
+
+⚠️ COMPENSATION: При ошибке на любом следующем шаге — Order Service установит статус CANCELLED.`,
         duration: 1600,
         realLatency: 25,
         payload: { orderId: 'order_789', status: 'PENDING', items: [{ productId: 'prod_456', qty: 2, price: 49.99 }], total: 99.98 },
@@ -368,7 +376,12 @@ Zero Trust: внутри mesh сервисы проверяют mTLS + headers.`
 3. acks=all — запись на все реплики перед подтверждением
 
 ПАТТЕРН: Event-Driven Architecture — коммуникация через события.
-SAGA Choreography — сервисы подписаны на нужные topics.`,
+SAGA Choreography — сервисы подписаны на нужные topics.
+
+⚠️ ВАЖНО: Каждый сервис должен иметь compensating transaction:
+• Order: cancelOrder() — отменить заказ
+• Inventory: releaseReservation() — вернуть товар на склад
+• Payment: refundPayment() — вернуть деньги`,
         duration: 800,
         realLatency: 5,
         payload: { topic: 'orders.created', key: 'order_789', partition: 3 },
@@ -560,7 +573,12 @@ Reservation Pattern — резервирование ресурса до под�
 2. Все шаги SAGA успешны: order ✓, inventory ✓, payment ✓
 3. Статус меняется на CONFIRMED
 
-ПАТТЕРН: SAGA Completion — все participants подтвердили.`,
+ПАТТЕРН: SAGA Completion — все participants подтвердили.
+
+⚠️ А ЕСЛИ PAYMENT УПАЛ? При ошибке Payment публикует payments.failed:
+1. Order Service получает событие → статус PAYMENT_FAILED
+2. Inventory Service получает событие → releaseReservation()
+Это и есть Compensating Transactions — откат всех успешных шагов.`,
         duration: 800,
         realLatency: 10,
         payload: { consumerGroup: 'order-payments-consumer', topic: 'payments.completed' },
@@ -988,7 +1006,10 @@ Eventual Consistency между регионами (~100ms lag).`,
 3. US пользователи видят данные с ~100ms задержкой
 
 ПАТТЕРН: Event-Driven Replication.
-Eventual Consistency — данные появятся через ~100ms.`,
+Eventual Consistency — данные появятся через ~100ms.
+
+⚠️ RPO > 0: При аварии EU DC данные за последние ~100ms могут быть потеряны!
+Для нулевых потерь нужна синхронная репликация (но +latency).`,
         duration: 1600,
         realLatency: 50,
         payload: { targetRegion: 'us-east-1', totalLag: '~100ms' },
@@ -1029,7 +1050,10 @@ Eventual Consistency — данные появятся через ~100ms.`,
 3. Asia пользователи видят данные с ~200ms задержкой
 
 ПАТТЕРН: Geo-Distributed Database.
-Trade-off: consistency vs latency.`,
+Trade-off: consistency vs latency.
+
+⚠️ RPO ~200ms: При аварии EU DC последние транзакции могут не доехать до Asia.
+Это цена асинхронной репликации — нулевых потерь не бывает без синхронной записи.`,
         duration: 1600,
         realLatency: 50,
         payload: { targetRegion: 'ap-southeast-1', totalLag: '~200ms', distance: '~10000km' },
@@ -1192,8 +1216,10 @@ GLB РЕАКЦИЯ:
 ПАТТЕРН: Active-Active Multi-DC
 Все ДЦ готовы принять трафик в любой момент.
 
-⚡ ВРЕМЯ FAILOVER: ~50ms
-Клиент даже не заметил переключения!`,
+⏱️ ВРЕМЯ FAILOVER для НОВЫХ запросов: ~50ms на уровне GLB.
+⚠️ НО: Клиенты с кэшированным DNS (TTL=300 сек) будут пытаться
+подключиться к EU ещё до 5 минут! Полный failover = до TTL.
+Для критичных систем используют короткий TTL (30-60 сек) + health checks на клиенте.`,
         duration: 2400,
         realLatency: 85,
         payload: { targetDC: 'us-east-1', reason: 'failover_from_eu', latency: '85ms' },
@@ -1622,16 +1648,18 @@ HAProxy метрики:
 
 Security Layer (WAF + Rate Limiting) — первая линия защиты!
 
-ЛИМИТЫ ДЛЯ user_456:
-• POST /orders: 10 req/min (обычные пользователи)
+ADAPTIVE RATE LIMITING для user_456:
+• Базовый лимит POST /orders: 10 req/min
 • Premium users: 100 req/min
+• При высокой нагрузке системы лимиты снижаются на 30-50%
 
-In-memory sliding window check:
-• Current count: 11
-• Limit: 10
-• 11 > 10 → ПРЕВЫШЕН!
+Token bucket check (adaptive):
+• Current tokens: 0
+• Base limit: 10, adjusted: 7 (система под нагрузкой)
+• 0 tokens → ПРЕВЫШЕН!
 
-РЕШЕНИЕ: Отклонить запрос с 429.`,
+РЕШЕНИЕ: Отклонить с 429 + Retry-After header.
+В продакшене используются token bucket / leaky bucket с graceful degradation.`,
         duration: 400,
         realLatency: 1,
         payload: { userId: 'user_456', endpoint: 'POST /orders', currentCount: 11, limit: 10 },

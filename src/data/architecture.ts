@@ -93,7 +93,7 @@ export const allNodes: ArchNode[] = [
     position: { x: 1500, y: -100 },
     data: {
       label: 'Auth Service',
-      description: 'Identity Provider — auth + token blacklist (in-memory TTL)',
+      description: 'Identity Provider — короткоживущие JWT (15 мин) + refresh tokens',
       technology: 'OAuth 2.0 / JWT',
       viewLevel: 'datacenter',
     },
