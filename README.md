@@ -22,8 +22,8 @@
 - DNS Lookup и Geo-routing
 - CDN как edge proxy и WAF
 - Global и Regional Load Balancing
-- JWT авторизация с blacklist в distributed cache
-- Security Layer (WAF + Rate Limiting)
+- JWT авторизация (короткоживущие токены + refresh tokens)
+- Security Layer (WAF + Adaptive Rate Limiting)
 - Service Mesh с sidecar proxies
 - SAGA паттерн через Event Bus
 - Репликация между датацентрами

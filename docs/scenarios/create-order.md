@@ -29,29 +29,29 @@ Client → DNS → CDN → Global LB → Data Center
 ### Фаза 2: Авторизация
 
 ```
-API Gateway → Auth Service → Redis (Session Store)
+API Gateway → Auth Service
 ```
 
 **Ключевые паттерны:**
 - **JWT Token Validation** — локальная проверка подписи без обращения к БД
-- **Token Blacklisting** — проверка отзыва токена в Redis
+- **Short-lived Tokens** — короткоживущие JWT (15 мин) + refresh tokens
 - **Claims-based Identity** — вся информация о пользователе в токене
 
-**Важно:** 99% запросов валидируются локально. Обращение к Auth Service только для проверки blacklist.
+**Важно:** Вместо blacklist используются короткоживущие токены. При logout пользователь просто не получит новый refresh token. Это масштабируется лучше, чем централизованный blacklist.
 
 ### Фаза 3: Rate Limiting
 
 ```
-Regional LB → Rate Limiter → Redis (Counters)
+Regional LB → Security Layer (WAF + Rate Limiter)
 ```
 
 **Ключевые паттерны:**
-- **Token Bucket** — алгоритм ограничения запросов
-- **Distributed Rate Limiting** — единый счётчик для всех инстансов балансировщика
-- **Sliding Window** — окно 60 секунд с атомарным INCR в Redis
+- **Adaptive Rate Limiting** — лимиты меняются в зависимости от нагрузки системы
+- **Token Bucket / Sliding Window** — алгоритмы ограничения запросов
+- **Graceful Degradation** — при высокой нагрузке лимиты ужесточаются
 
-**Лимиты:**
-- Обычный пользователь: 100 req/min
+**Лимиты (адаптивные):**
+- Обычный пользователь: 100 req/min (базовый), снижается при перегрузке
 - Premium: 500 req/min
 
 ### Фаза 4: Kubernetes Cluster
@@ -85,6 +85,8 @@ Order Service → Kafka → [Inventory, Payment, Notification Services]
 **Компенсации (при ошибке):**
 - Payment failed → `ReleaseInventory` → `CancelOrder`
 
+**Важно о SAGA:** Каждый сервис должен иметь compensating transaction для отката. Не все бизнес-процессы можно полностью откатить (например, отправленный email нельзя "отменить").
+
 ### Фаза 6: Репликация между ДЦ
 
 ```
@@ -95,6 +97,8 @@ EU DC → Kafka (Cross-DC) → US DC, Asia DC
 - **Async Replication** — eventual consistency между регионами
 - **Conflict Resolution** — Last-Write-Wins или vector clocks
 - **Read-Your-Writes** — sticky sessions для консистентности чтения
+
+**⚠️ RPO > 0:** При асинхронной репликации возможна потеря данных (~100-200ms) при аварии primary DC. Для нулевых потерь нужна синхронная репликация (но это увеличивает latency).
 
 ## Компоненты
 

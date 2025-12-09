@@ -37,13 +37,17 @@ Client → CDN (первая линия защиты)
 
 **Результат:** Отсекается ~20% нелегитимного трафика
 
-### Уровень 2: Load Balancer Rate Limiting
+### Уровень 2: Adaptive Rate Limiting
 
 ```
-Regional LB → Rate Limiter → Redis
+Regional LB → Security Layer (WAF + Rate Limiter)
 ```
 
-**Алгоритм: Token Bucket**
+**Алгоритм: Adaptive Token Bucket**
+
+Лимиты динамически меняются в зависимости от нагрузки системы:
+- При низкой нагрузке: базовые лимиты
+- При высокой нагрузке: лимиты снижаются на 30-50% (graceful degradation)
 
 ```
 ┌─────────────────┐
@@ -67,14 +71,14 @@ Regional LB → Rate Limiter → Redis
    Process request
 ```
 
-**Конфигурация лимитов:**
+**Конфигурация лимитов (адаптивные):**
 
-| Тип | Лимит | Окно |
-|-----|-------|------|
-| Per User | 100 req | 1 min |
-| Per IP | 1000 req | 1 min |
-| Per Endpoint | 10000 req | 1 min |
-| Global | 50000 req | 1 sec |
+| Тип | Базовый лимит | При перегрузке | Окно |
+|-----|---------------|----------------|------|
+| Per User | 100 req | 50-70 req | 1 min |
+| Per IP | 1000 req | 500-700 req | 1 min |
+| Per Endpoint | 10000 req | 5000-7000 req | 1 min |
+| Global | 50000 req | 25000-35000 req | 1 sec |
 
 **Ответ при превышении:**
 ```http
